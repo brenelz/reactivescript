@@ -436,6 +436,11 @@ repro in `ref/oracle/repros/` still reproduces on that commit.
   not built** (#4695, S-44). An outside input change under a guess reads
   `pending? x` `false` (S-solid-44 instant 3); the ruled verdict is `true`.
   The screen is the ruled one; `latest x` there is DV-19.
+  Inside a `loading on(sel)` region whose `on` reads the held input, the
+  same probe reads `false` even where one outside it reads `true`, so
+  `disabled={pending? x}` there does not disable (found by the eval board,
+  2026-11-14: `eval/results/r15prep/repro/pending-probe-inside-held-region.*`,
+  plain Solid in its `.spec.tsx`).
 - **DV-23 (a born-held branch under a display-ahead condition) — Solid's
   ruling, not built** (#4695, decision 4: D-1; S-46's plain row). A branch a
   probe opens whose content read the held write plainly attaches with its

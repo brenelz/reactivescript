@@ -52,6 +52,10 @@ function catchAcc(f: () => unknown, match: (err: unknown) => boolean, alt: (err:
 function tryCatch(f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown): unknown {
   try { return f(); } catch (err) { if (err instanceof NotReadyError || !match(err)) throw err; return alt(err); }
 }
+/** As the client's: with no observer the read is a snapshot (04 R-8) and the client builds no boundary, so no ids. */
+function catchRead(f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown): unknown {
+  return getObserver() ? catchAcc(f, match, alt)() : tryCatch(f, match, alt);
+}
 
 // ---------------------------------------------------------------- the wire (12 SF-6; a copy of ref/src/failure.ts's)
 function wireCopy(v: unknown, where: string, fail: (msg: string) => never): unknown {
@@ -218,7 +222,7 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
 
     snapshot(get: Acc) { try { return untrack(get); } catch (e) { if (e instanceof NotReadyError) return PENDING_MARK; throw e; } },
     errorClass: (name: string, params: string[], message: (...args: unknown[]) => unknown) => errorClass(name, params, message, `${name}#${classSeq++}`),   // a declaration's identity, sent with its failures (SV-5a)
-    isA, PANIC, catchMemo: catchAcc, tryCatch, catchRead: (f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown) => catchAcc(f, match, alt)(),
+    isA, PANIC, catchMemo: catchAcc, tryCatch, catchRead,
     throw: (e: unknown): never => { throw e; },
     eq: (a: unknown, b: unknown) => a === b,
     untrack, omit, latest: (f: () => unknown) => latest(() => latestWhole(f())), isPending: (f: () => unknown) => isPending(() => readWhole(f())),

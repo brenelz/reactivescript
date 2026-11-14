@@ -243,6 +243,10 @@ struct Sym<'a> {
     foreign: Option<FShape>,
     /// MO-10d: bound from a foreign accessor — it may hold, as a question's reader does
     reader: bool,
+    /// an action declared here: how many arguments a call passes (AC-1f)
+    arity: Option<usize>,
+    /// RG-4b: the props of `component C()`, which declares none — C's name: reading them is UNBOUND
+    no_props: Option<String>,
 }
 impl<'a> Sym<'a> {
     fn new(kind: SymKind, name: &str, region: RId, line: i64) -> Self {
@@ -278,6 +282,8 @@ impl<'a> Sym<'a> {
             decl_env: None,
             foreign: None,
             reader: false,
+            arity: None,
+            no_props: None,
         }
     }
 }
@@ -1199,7 +1205,10 @@ impl<'a> Checker<'a> {
             match d {
                 Decl::Server { params, .. } => sym.params = Some(params.iter().map(|n| SigParam { name: n.clone(), r#ref: false, ty: None }).collect()),
                 Decl::Source { question, .. } => sym.question = *question,
-                Decl::Action { .. } => sym.io = true,
+                Decl::Action { params, .. } => {
+                    sym.io = true; // R-io-2: an action is io
+                    sym.arity = Some(params.len()); // AC-1f: its parameters
+                }
                 Decl::Fn { params, decls: fdecls, .. } => {
                     sym.params = Some(params.iter().map(|p| SigParam { name: p.name.clone(), r#ref: p.r#ref, ty: p.ty.clone() }).collect());
                     sym.instantiating = params.iter().any(|p| p.r#ref) || !fdecls.is_empty();
@@ -1865,11 +1874,15 @@ impl<'a> Checker<'a> {
                 sym.fails_t = Some(FailsT::Expr { e: tail, env: inner, cache: None, busy: false });
                 sym.rows = Some(RowsT::Expr { e: tail, env: inner, cache: None, busy: false });
             }
-            Decl::Component { name, props, decls, view, line, .. } => {
+            Decl::Component { name, props, decls, view, line, no_props, .. } => {
                 let s = self.lookup(env, name).unwrap();
                 let r = self.syms[s].comp_region.unwrap();
                 let inner = self.env(Some(env), r);
-                self.bind(inner, props, Sym::new(SymKind::Props, props, r, *line as i64));
+                let mut ps = Sym::new(SymKind::Props, props, r, *line as i64);
+                if *no_props {
+                    ps.no_props = Some(name.clone());
+                }
+                self.bind(inner, props, ps);
                 self.syms[s].comp_env = Some(inner);
                 self.block(decls, view, inner, Ctx::reactive());
                 self.later.push(Later::Content { ms: view, env: inner, anc: vec![] });
@@ -1995,6 +2008,9 @@ impl<'a> Checker<'a> {
     // ---- expressions ----
     fn resolve(&mut self, name: &str, env: EId, ctx: Ctx) -> Option<SId> {
         if let Some(s) = self.lookup(env, name) {
+            if let Some(c) = self.syms[s].no_props.clone() {
+                self.err("UNBOUND", "RG-4b", format!("{} is not declared here: component {} declares no props — declare what it takes, `component {}(props: {{ … }})`, and pass it where it is applied", name, c, c));
+            }
             self.sided(s, ctx);
             return Some(s);
         }
@@ -2264,9 +2280,9 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     let s = self.lookup(env, fname);
-                    let (io, kind, side, io_via, instantiating) = match s {
-                        Some(s) => (self.syms[s].io, Some(self.syms[s].kind), self.syms[s].side, self.syms[s].io_via.clone(), self.syms[s].instantiating),
-                        None => (false, None, None, None, false),
+                    let (io, kind, side, io_via, instantiating, arity) = match s {
+                        Some(s) => (self.syms[s].io, Some(self.syms[s].kind), self.syms[s].side, self.syms[s].io_via.clone(), self.syms[s].instantiating, self.syms[s].arity),
+                        None => (false, None, None, None, false, None),
                     };
                     if !ctx.imperative && (io || (s.is_none() && fname == "log")) {
                         if ctx.in_fn {
@@ -2288,6 +2304,16 @@ impl<'a> Checker<'a> {
                     }
                     if kind == Some(SymKind::Comp) {
                         self.err("COMPONENT_AS_VALUE", "RG-4a", format!("component {} called as a function: apply it in a view", fname));
+                    }
+                    if let (Some(SymKind::Action), Some(n)) = (kind, arity) {
+                        if args.len() != n {
+                            let takes = match n {
+                                0 => "no arguments".to_string(),
+                                1 => "1 argument".to_string(),
+                                n => format!("{} arguments", n),
+                            };
+                            self.err("ARGUMENT_COUNT", "AC-1f", format!("{} takes {} and is called with {}: an action's parameters are its whole input — pass each one, and nothing it does not declare", fname, takes, args.len()));
+                        }
                     }
                     self.model.call(s, kind.map(|k| k.as_str()).unwrap_or(""));
                 }
@@ -4510,5 +4536,29 @@ export default component App() {
         // the effect (line 8) and the detail read under a plain `loading` (line 24); not `latest`/`pending?`, not the
         // outer `on(sel)` region's own read of `detail` beside the inner one
         assert_eq!(got, vec![8, 24]);
+    }
+
+    /// 06 AC-1f: a call of a declared action passes one argument per parameter; 03 RG-4b: `component C()` has no
+    /// `props` (the eval board's check-accepts-arity-and-missing-props.rx).
+    #[test]
+    fn argument_count_and_missing_props() {
+        let src = r#"component Lane() { <h3>{props.col}</h3> }
+component Card(props: { col: string }) { <p>{props.col}</p> }
+export default component App() {
+  source n := 0
+  action go() { n := 1 }
+  action by(k: number, m: number) { n := k + m }
+  <div>
+    <Lane col="todo" />
+    <Card col="done" />
+    <button onClick={() => { go(1, 2) }}>a</button>
+    <button onClick={() => { go() }}>b</button>
+    <button onClick={() => { by(1) }}>c</button>
+    <button onClick={() => { by(1, 2) }}>d</button>
+  </div>
+}
+"#;
+        let got: Vec<(i64, String)> = codes(src, false).into_iter().filter(|(_, c)| c == "ARGUMENT_COUNT" || c == "UNBOUND").collect();
+        assert_eq!(got, vec![(1, "UNBOUND".to_string()), (10, "ARGUMENT_COUNT".to_string()), (12, "ARGUMENT_COUNT".to_string())], "{:?}", codes(src, false));
     }
 }

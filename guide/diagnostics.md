@@ -656,6 +656,27 @@ export default component App() {
 }
 ```
 
+### ARGUMENT_COUNT
+
+A call of an action passes one argument per parameter (AC-1f). A missing argument is `undefined` in the body and an
+extra one is dropped, both silently, so the count is checked where the action is declared in the module.
+
+```rx before
+export default component App() {
+  source n := 0
+  action go(by: number) { n := n + by }
+  <button onClick={() => { go(1, 2) }}>{n}</button>
+}
+```
+
+```rx after
+export default component App() {
+  source n := 0
+  action go(by: number) { n := n + by }
+  <button onClick={() => { go(1) }}>{n}</button>
+}
+```
+
 ### IO_IN_FN
 
 A `fn` is pure by definition (R-io-2). Code that calls io is an `action`, or the io call moves into the handler.
@@ -826,6 +847,13 @@ user's change disappears while its action is out. Put the element inside the val
 `disabled={pending? x}`, or keep the pending change in a source of its own until it lands. Solid warns
 `OPTIMISTIC_WRITE_WHILE_LOADING` at run time for the same case.
 
+Neither cover holds when the selection changes while a guess on `x` is out. That change joins the guess's hold
+(H-11), so a `loading on(sel)` region keeps its content (H-6), and `pending? x` read in that region's markup is
+`false` on Solid today although the rule says `true` (05 DV-22): the control stays enabled and a second click guesses
+on the old answer. The check accepts it, since the element is covered. Test the verdict in the handler too, where it
+reads `true` (R-12): `onClick={() => { if (!(pending? x)) { flip(it.id) } }}`, or keep the pending change in a source
+of its own.
+
 ```rx before
 export default component App() {
   source sel := 1
@@ -920,6 +948,23 @@ component List(props) {
 }
 export default component App() {
   <List />
+}
+```
+
+`props` is a name only in a component that declares it: `component Lane()` has none (RG-4b), and a read of
+`props.col` there would be `undefined`. Declare what it takes.
+
+```rx before
+component Lane() { <h3>{props.col}</h3> }
+export default component App() {
+  <Lane col="todo" />
+}
+```
+
+```rx after
+component Lane(props: { col: string }) { <h3>{props.col}</h3> }
+export default component App() {
+  <Lane col="todo" />
 }
 ```
 

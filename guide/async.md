@@ -277,7 +277,32 @@ export action add(id: string, title: string) {
   looks lost. A write against a value that isn't shown yet needs a place to show: keep the control out until the
   value is shown (under its `loading` boundary, or disabled while it is pending), or keep the write in a
   client-owned layer of its own ("three layers" above) and guess there. The compiler flags a control that can guess
-  while its value loads (`GUESS_WHILE_LOADING`).
+  while its value loads (`GUESS_WHILE_LOADING`). One case it can't see: a selection changed while a guess on the
+  value is out joins the guess's hold (H-11), so the `loading on(sel)` region keeps its rows, and
+  `disabled={pending? x}` inside it stays `false` on Solid today (05 DV-22). Test `pending? x` in the handler as
+  well; there it reads `true` (R-12).
+
+### One store over the server
+
+When several views show one kind of row (a board's columns, a list and its detail, a count), keep one store of them,
+not a copy per view:
+
+- **Lay the answers flat in one keyed equation.** Each server answer stays a question of its own; one equation joins
+  them into one list with a `key`, and every view is a `filter` or a sort of it. A row is then one row wherever it
+  shows, and a guess on it shows in all of them.
+- **One write is one path guess on one row** (`guess rows[i].field := v`, "Writing one row of a list" above). Not a
+  guess on the whole list, and not one per view.
+- **Work out positions in the handler and pass them in.** An index, a count, a place in the target: compute them in
+  the handler from the screen (a snapshot, R-8) and pass them as arguments. An action that reads a value another
+  action guessed and then guesses is one change with that action (H-11, Solid's D-33; solidjs/solid#4788): the two
+  end together, so a declined write stays up until the other one ends.
+- **On accept, re-ask the answers that held the row and the one it joined.** Name them from the answers and the
+  action's arguments, not from the store, whose row already shows the guess. On a decline re-ask nothing: the guess
+  reverts by itself.
+- **A create whose answer is the new row** writes that row into its answer source after the `await` (a source with a
+  question takes a write until its next answer, ST-5a, so the row is never there twice). Until then show a placeholder
+  from a guess list of its own, inert: no controls, since the server doesn't know its id yet.
+- **Errors stay plain sources.** A guess reverts with its action; an error must outlive it.
 
 ## 4. Things that look like bugs and aren't
 

@@ -51,6 +51,7 @@ Expr      ::= TypeScript's, without assignment, `this`, `function`, `new` on rea
   launched it, is held until the body returns (AC-1). A handler that guesses, declares `affects`, or writes and awaits
   is an action too (AC-1b).
 - An action with no `await` (`select(id) { selected := id }`) is an ordinary instant.
+- A call passes one argument per parameter (AC-1f, `ARGUMENT_COUNT`).
 - A handler launches an action and goes on without waiting for it. An action that awaits another action waits for
   it; that await can't fail, since every action catches its own failures (AC-1, R-f-6).
 - `await` is a statement: `await f(x)` or `let r = await f(x)`, optionally `… catch (e) => alt` (AC-1).

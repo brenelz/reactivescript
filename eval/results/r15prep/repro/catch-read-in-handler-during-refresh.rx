@@ -2,6 +2,7 @@
 // fresh memo; while an action's `refresh x` is in flight that memo has no committed value, so the click throws NotReadyError
 // (uncaught page error, the click is lost). The same read without `catch` gives the answer on screen; so does plain Solid
 // (untrack(ans) during refresh -> committed value). Also: the checker reports neither R-8 nor GUESS_WHILE_LOADING through the fn.
+// Fixed 2026-11-14: with no observer `catchRead` is a snapshot (R-8; ref/compile/rt-*.ts, scenarios/S-catch-snapshot.md).
 // Run: probe-rx.mjs <desk with this as src/main.rx> catch-read-in-handler-during-refresh.steps.mjs
 import pure { fetchCards } from "./api"
 import { moveCard } from "./api"

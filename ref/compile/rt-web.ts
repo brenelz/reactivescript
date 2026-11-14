@@ -72,6 +72,12 @@ function catchAcc(f: () => unknown, match: (err: unknown) => boolean, alt: (err:
 function tryCatch(f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown): unknown {
   try { return f(); } catch (err) { if (err instanceof NotReadyError || !match(err)) throw err; return alt(err); }
 }
+/** `e catch (x: C) => alt` read where it was written. In reactive scope it is `catchAcc`'s boundary. Read with no observer —
+ *  a component `fn` called from a handler — it is a snapshot (04 R-8): the committed value, or `alt` on a matching failure
+ *  (R-f-7), as `tryCatch`; a fresh boundary there would have no committed value while a question is out (S-catch-snapshot). */
+function catchRead(f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown): unknown {
+  return getObserver() ? catchAcc(f, match, alt)() : tryCatch(f, match, alt);
+}
 class Fallback { get: () => unknown; constructor(g: () => unknown) { this.get = g; } }
 function unwrapFallback(v0: unknown): unknown { let v = v0; if (v instanceof Fallback) v = v.get(); if (v instanceof Forward) throw (v as Forward).err; return v; }
 const NO_PROVISION: Entry = {};
@@ -290,7 +296,7 @@ export function createApp(opts: { root: any; api?: Record<string, (...a: any[]) 
     snapshot(get: Acc) { try { return untrack(get); } catch (e) { if (e instanceof NotReadyError) return PENDING_MARK; throw e; } },
     // ---- failures (R-f) ----
     errorClass: (name: string, params: string[], message: (...args: unknown[]) => unknown) => errorClass(name, params, message, `${name}#${classSeq++}`),   // a declaration's identity: the same on both sides (SV-5a)
-    isA, PANIC, catchMemo: catchAcc, tryCatch, catchRead: (f: () => unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown) => catchAcc(f, match, alt)(),
+    isA, PANIC, catchMemo: catchAcc, tryCatch, catchRead,
     throw: (e: unknown): never => { throw e; },
     eq: (a: unknown, b: unknown) => raw(a) === raw(b),
     untrack, omit, latest: (f: () => unknown) => latest(() => latestWhole(f())), isPending: (f: () => unknown) => isPending(() => readWhole(f())),

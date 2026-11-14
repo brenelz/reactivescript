@@ -78,6 +78,7 @@ type Sym = {
   param?: boolean;                     // a fn's parameter: never a write target (O-4)
   instantiating?: boolean;             // fn with ref params or declarations (E-9)
   params?: { name: string; ref: boolean }[];
+  arity?: number;                      // an action declared here: how many arguments a call passes (AC-1f)
   captures?: Sym[];                    // a value holding a closure: the reactive names it captured (O-3)
   retCaptures?: Sym[];                 // what calling that value can return holding (O-3)
   propOf?: { comp: Region; field: string };   // O-3: not a name but a prop's argument, stored — its captures are the caller's ("*": all of props)
@@ -96,6 +97,7 @@ type Sym = {
   serverRejects?: () => Set<string>;   // SF-6b: what a call's promise rejects with — its body's failures, and Error (transit)
   foreign?: Shape;                     // MO-10: a declared JS primitive (a fn) or an instance of one (an equation): what its result is
   reader?: boolean;                    // MO-10d: bound from a foreign accessor — it may hold, as a question's reader does
+  noProps?: string;                    // RG-4b: the props of `component C()`, which declares none — C's name: reading them is UNBOUND
   fnDecl?: Extract<Decl, { k: "fn" }>; declEnv?: Env;   // a fn's declaration and the scope it names from (SF-3: what it reaches)   // a context (RG-7): its identity, whether it carries a source, and its declared rows (null: inferred from its provisions)
 };
 const reactiveKinds = new Set<SymKind>(["source", "eq", "props"]);
@@ -485,7 +487,7 @@ class Checker {
       const sym: Sym = { kind: d.k === "fn" ? "fn" : d.k === "component" ? "comp" : d.k === "action" ? "action" : d.k === "server" ? "server" : d.k === "source" ? "source" : d.k === "error" ? "errclass" : "eq", name: d.name, region: env.region, line: d.line };
       if (d.k === "server") sym.params = d.params.map(name => ({ name, ref: false }));
       if (d.k === "source") sym.question = !!d.question;
-      if (d.k === "action") sym.io = true;                                                 // R-io-2: an action is io
+      if (d.k === "action") { sym.io = true; sym.arity = d.params.length; }                 // R-io-2: an action is io; AC-1f: its parameters
       if (d.k === "fn") { sym.params = d.params; sym.instantiating = d.params.some(p => p.ref) || d.decls.length > 0; sym.fnDecl = d; sym.declEnv = env; }
       if (d.k === "component") { sym.comp = d; sym.compRegion = this.region(env.region, "component", { component: true, name: d.name }); this.compSyms.set(sym.compRegion, sym); }
       if (d.k === "eq") sym.eqDecl = d;
@@ -733,7 +735,7 @@ class Checker {
       case "component": {
         const sym = env.lookup(d.name)!; const r = sym.compRegion!;
         const inner = new Env(env, r);
-        this.bind(inner, d.props, { kind: "props", name: d.props, region: r, line: d.line });
+        this.bind(inner, d.props, { kind: "props", name: d.props, region: r, line: d.line, ...(d.noProps ? { noProps: d.name } : {}) });
         sym.compEnv = inner;
         this.block(d.decls, d.view, inner, { scope: "reactive" });
         this.later.push(() => this.contentCheck(d.view, inner, []));
@@ -807,7 +809,9 @@ class Checker {
 
   // ---- expressions ----
   private resolve(name: string, env: Env, ctx: Ctx): Sym | undefined {
-    const s = env.lookup(name); if (s) { this.sided(s, ctx); return s; }
+    const s = env.lookup(name);
+    if (s?.noProps) this.err("UNBOUND", "RG-4b", `${name} is not declared here: component ${s.noProps} declares no props — declare what it takes, \`component ${s.noProps}(props: { … })\`, and pass it where it is applied`);
+    if (s) { this.sided(s, ctx); return s; }
     if (BUILTINS.has(name)) return undefined;
     if (ctx.scope === "imperative" && (name === "log" || /^\$\d+$/.test(name))) return undefined;   // the apply block's parameters; `log` is io and only in imperative scope
     this.err("UNBOUND", "SCOPE", `${name} is not declared here (a component sees its declaration site, not its caller — RG-7a)`);
@@ -897,6 +901,7 @@ class Checker {
           if (s?.side === "client" && ctx.scope === "reactive" && !ctx.server && !this.awaitedCalls.has(e)) this.err("CLIENT_NOT_AWAITED", "SF-5b", `${e.f.name}(…) is \`client\` JS: in reactive scope it is awaited — a client question, asked once the browser has the page (SV-7b) — never called for its value now`);
           if (s?.kind === "fn" && s.instantiating) this.err("INSTANTIATION_NOT_BOUND", "E-9", `${e.f.name}(…) declares state: bind it, \`x = ${e.f.name}(…)\` (RG-6)`);
           if (s?.kind === "comp") this.err("COMPONENT_AS_VALUE", "RG-4a", `component ${e.f.name} called as a function: apply it in a view`);
+          if (s?.kind === "action" && s.arity !== undefined && e.args.length !== s.arity) this.err("ARGUMENT_COUNT", "AC-1f", `${e.f.name} takes ${s.arity === 0 ? "no arguments" : s.arity === 1 ? "1 argument" : `${s.arity} arguments`} and is called with ${e.args.length}: an action's parameters are its whole input — pass each one, and nothing it does not declare`);
           this.model.call(s);
         }
         go(e.f); e.args.forEach(go); return;

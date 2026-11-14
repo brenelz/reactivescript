@@ -224,6 +224,14 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   its 3 .rx defects, and a latent one in a run that passed every test; on
   all 76 eval .rx apps and the repository's examples it fires on those 3
   runs only (S-infer-6).
+- **AC-1f (Calls pass the parameters).** [taken by default 2026-11-14] A
+  call of an action declared in the module passes one argument per
+  parameter; any other count is `ARGUMENT_COUNT` (static). The parameters
+  are the action's whole input: a missing one is `undefined` in the body
+  and an extra one is dropped, silently either way. An action imported from
+  an `.rx` module or passed as a prop is not checked (its signature carries
+  no parameters yet, MO-3). Found by the eval board (r15prep,
+  `check-accepts-arity-and-missing-props.rx`; S-check-1).
 - **AC-2 (Not special).** An action is only a way to tie writes to async
   work; the hold is the thing (H-2). `refresh`, `affects` and probes behave
   the same inside and outside one.
