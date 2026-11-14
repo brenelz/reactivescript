@@ -12,6 +12,7 @@ export const SOLID_PRIMS: Record<string, string> = {
   affects: "affects x (AC-5)",
   refresh: "refresh x (AC-4)",
   untrack: "a read in imperative scope: a snapshot (H-10)",
+  omit: "{ a, ...rest }: a rest of a destructured value, a live view of the other fields (RG-4b)",
   latest: "latest x (R-12)",
   isPending: "pending? x (R-9)",
   onFlush: "onFlush(() => { … }) (EF-8)",
@@ -50,6 +51,8 @@ export function noteFor(line: string): Note | undefined {
     return { helper: "createStore", name: m[1], reads: reads(m[2], m[1]), text: `source ${m[1]}, structured: a store (ST-2a)` };
   if ((m = /const (\w+)\$answer = createMemo\((.*)$/.exec(line)))
     return { helper: "createMemo", name: m[1], reads: reads(m[2], ""), text: `the answer of ${m[1]} key … = …, before rows are matched by key` };
+  if ((m = /const (\w+) = omit\(\w+((?:, "\w+")*)\)/.exec(line)))
+    return { helper: "omit", name: m[1], reads: [], text: `{ ${m[2].split(", ").filter(Boolean).map((k) => k.replace(/"/g, "") + ", ").join("")}...${m[1]} }: the other fields, still live (RG-4b)` };
   if ((m = /const (\w+) = createProjection\(\(\) => \w+\$answer\(\), \[\], \{ key: ("?\w+"?) \}/.exec(line)))
     return { helper: "createProjection", name: m[1], reads: [], text: `${m[1]} key ${m[2].replace(/"/g, "")} = …: each row keeps its identity by ${m[2].replace(/"/g, "")} (ST-4)` };
   if ((m = /const (\w+) = createProjection\(\((\w+)\) =>/.exec(line)))

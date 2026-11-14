@@ -69,6 +69,14 @@ await check("an object source reads as createStore", async () => {
   assert(text.includes("person?.first") && !text.includes("person()"), "the store is called like a signal");
 });
 
+await check("a rest prop reads as omit, spread without a call", async () => {
+  await type(`component Badge({ label, tone = "info", ...rest }) {\n  <span class={tone} {...rest}>{label}</span>\n}\nexport default component App() {\n  <Badge label="New" title="fresh" />\n}\n`);
+  const text = await js.innerText();
+  assert(text.includes('const rest = omit(props, "label", "tone");') && text.includes("{...rest}"), `no omit:\n${text}`);
+  assert(!text.includes("__rt") && !text.includes("rest()"), "omit is wrapped or called");
+  assert((await page.getByTestId("explain").innerText()).includes("omit"), "Explain does not list omit");
+});
+
 await check("the projection example reads as createProjection, keyed and draft", async () => {
   await page.getByTestId("example").selectOption("projection");
   await js.getByText("createProjection", { exact: false }).first().waitFor({ timeout: 5000 });

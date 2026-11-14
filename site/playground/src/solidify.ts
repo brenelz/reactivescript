@@ -178,6 +178,13 @@ export function solidify(code: string): string {
   code = code.replace(/\b__B\.str\(/g, "String(");
 
   code = eachCall(code, "__rt.memo", (a) => {
+    // `...rest` in a prop pattern: Solid's omit is already a live view of props, so the memo around it adds nothing
+    const omitted = /^\(__prev\)\s*=>\s*__rt\.omit\(([\s\S]*)\)$/.exec(a[1]);
+    if (omitted && close(a[1], a[1].indexOf("__rt.omit(") + 9) === a[1].length) {
+      stores.add(JSON.parse(a[0]));
+      used.add("omit");
+      return `omit(${omitted[1]})`;
+    }
     used.add("createMemo");
     return `createMemo(${unprev(a[1])}${a[2] && a[2] !== "undefined" ? `, ${a[2]}` : ""})`;
   });
@@ -228,15 +235,15 @@ export function solidify(code: string): string {
       .replace(/\bp\$(\w+)\b/g, (_, n) => `prev${cap(n)}`)
       .replace(/\b[vV]\$(\w+)\b/g, "$1"),
   );
-  // a store is read as itself, not called: within the block that declares it
+  // a store, or omit's view of props, is read as itself, not called: within the block that declares it
   for (const n of stores) {
-    const decl = new RegExp(`const (?:\\[${n}, \\w+\\]|${n}) = create(?:Store|OptimisticStore|Projection)\\(`, "g");
+    const decl = new RegExp(`const (?:\\[${n}, \\w+\\]|${n}) = (?:create(?:Store|OptimisticStore|Projection)|omit)\\(`, "g");
     for (const m of [...code.matchAll(decl)].reverse()) {
       let open = (m.index ?? 0) - 1;
       while (open >= 0 && !(code[open] === "{" && close(code, open) > (m.index ?? 0))) open--;
       const end = open < 0 ? code.length : close(code, open);
       const from = open < 0 ? 0 : open;
-      code = code.slice(0, from) + inCode(code.slice(from, end), (part) => part.replace(new RegExp(`(?<![\\w$.])${n}\\(\\)`, "g"), n)) + code.slice(end);
+      code = code.slice(0, from) + inCode(code.slice(from, end), (part) => part.replace(new RegExp(`(?<=^|[^\\w$.]|\\.\\.\\.)${n}\\(\\)`, "g"), n)) + code.slice(end);
     }
   }
 
