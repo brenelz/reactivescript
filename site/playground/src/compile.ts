@@ -22,7 +22,6 @@ export type AppOut = {
 export type Result = {
   diagnostics: Diagnostic[];
   app: AppOut;
-  projection: Record<string, string | null>;
   ms: number;
 };
 
@@ -58,16 +57,14 @@ export const toFs = (files: Record<string, string>): Files =>
 const normalize = (d: any): Diagnostic => ({ ...d, message: d.message ?? d.msg ?? "" });
 
 export function compile(files: Record<string, string>, target: Target): Result {
-  if (!call) return { diagnostics: [], app: { error: "the compiler is not loaded: reload the page" }, projection: {}, ms: 0 };
+  if (!call) return { diagnostics: [], app: { error: "the compiler is not loaded: reload the page" }, ms: 0 };
   const t0 = performance.now();
   const fs = toFs(files);
   const diagnostics: Diagnostic[] = [];
-  const projection: Record<string, string | null> = {};
   for (const file of Object.keys(fs).filter((f) => f.endsWith(".rx") && !f.endsWith(".d.rx"))) {
     try {
-      const a = call("analyze", { file, prelude: "./prelude" }, fs);
+      const a = call("analyze", { file, prelude: "./prelude", project: false }, fs);
       diagnostics.push(...(a.diagnostics ?? []).map(normalize));
-      projection[file] = a.code ?? null;
     } catch (e) {
       diagnostics.push({ file, code: "PANIC", rule: "—", message: `the compiler trapped: ${(e as Error).message}` });
     }
@@ -82,5 +79,5 @@ export function compile(files: Record<string, string>, target: Target): Result {
   // analyze reports per file; app's checker run can name a file analyze did not (a .d.rx, say)
   for (const d of app.diagnostics ?? [])
     if (!diagnostics.some((x) => x.file === d.file && x.code === d.code && x.line === d.line)) diagnostics.push(d);
-  return { diagnostics, app, projection, ms: performance.now() - t0 };
+  return { diagnostics, app, ms: performance.now() - t0 };
 }

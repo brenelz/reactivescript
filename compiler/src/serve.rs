@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// One request: `analyze` (`{file, overlays, prelude}`), `app` (`{entry, overlays, target, moduleName, spa, jsx}`) or `prelude`.
+/// One request: `analyze` (`{file, overlays, prelude, project}`), `app` (`{entry, overlays, target, moduleName, spa, jsx}`) or `prelude`.
 pub fn request(method: &str, params: &Value, disk: &dyn Fn(&str) -> Option<String>) -> Value {
     match method {
         "analyze" => analyze(params, disk),
@@ -83,7 +83,9 @@ pub fn analyze(params: &Value, disk: &dyn Fn(&str) -> Option<String>) -> Value {
     let src = set.sources.get(&file).cloned().unwrap_or_default();
     let prelude = params["prelude"].as_str();
     let mut out = json!({ "code": null, "mappings": [] });
-    if let Some(p) = crate::project::project_modules_with(&set, prelude).into_iter().find(|p| p.rx == file) {
+    // `project: false`: diagnostics only, for a caller that does not show the TSX projection
+    let project = params["project"].as_bool().unwrap_or(true);
+    if let Some(p) = project.then(|| crate::project::project_modules_with(&set, prelude).into_iter().find(|p| p.rx == file)).flatten() {
         let (gi, si) = (utf16_index(&p.code), utf16_index(&src));
         let maps: Vec<[u32; 3]> = p.mappings.iter().map(|m| [gi[m.gen as usize], si[m.src as usize], si[(m.src + m.len) as usize] - si[m.src as usize]]).collect();
         let u = |i: &[u32], a: u32, n: u32| [i[a as usize], i[(a + n) as usize] - i[a as usize]];

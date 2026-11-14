@@ -57,7 +57,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     (e) => setCompiler(String(e?.message ?? e)),
   );
   const ready = () => compiler() === "ready";
-  const result = createMemo(() => (ready() ? compile(files(), "dom") : { diagnostics: [], app: {}, projection: {}, ms: 0 }));
+  const result = createMemo(() => (ready() ? compile(files(), "dom") : { diagnostics: [], app: {}, ms: 0 }));
   const lastGood = createMemo<ReturnType<typeof compile> | undefined>((prev) => (result().app.modules ? result() : prev));
   const stale = () => ready() && !result().app.modules;
   const diagnostics = () => result().diagnostics;
