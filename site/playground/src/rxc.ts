@@ -1,6 +1,6 @@
 export type Files = Record<string, string>;
 
-export function loadRxc(bytes: BufferSource) {
+export function loadRxc(module: WebAssembly.Module) {
   let x: any;
   let files: Files = {};
   const enc = new TextEncoder(), dec = new TextDecoder();
@@ -16,7 +16,6 @@ export function loadRxc(bytes: BufferSource) {
       return f in files ? put(enc.encode(files[f])) : 0;
     },
   };
-  const module = new WebAssembly.Module(bytes);
   const fresh = () => (x = new WebAssembly.Instance(module, { env }).exports);
   fresh();
   return (method: string, params: any, fs: Files = {}) => {

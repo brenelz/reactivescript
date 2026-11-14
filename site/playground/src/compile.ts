@@ -31,11 +31,23 @@ export const ENTRY = "/main.rx";
 // kept across hot updates, so an edited module does not drop the loaded compiler
 let call: ReturnType<typeof loadRxc> | undefined = import.meta.hot?.data.call;
 
-export async function init() {
+async function fetchModule(): Promise<WebAssembly.Module> {
   const res = await fetch(`${import.meta.env.BASE_URL}rxc.wasm`);
   if (!res.ok || res.headers.get("content-type")?.includes("text/html")) throw new Error("rxc.wasm is missing: run `pnpm wasm` to build it");
-  const bytes = await res.arrayBuffer();
-  call = loadRxc(bytes);
+  return res.headers.get("content-type")?.includes("application/wasm") ? WebAssembly.compileStreaming(res) : WebAssembly.compile(await res.arrayBuffer());
+}
+
+export async function init() {
+  let module: WebAssembly.Module | undefined;
+  for (let attempt = 1; !module; attempt++) {
+    try {
+      module = await fetchModule();
+    } catch (e) {
+      // a download cut off midway (NotReadableError, a network error) is worth another try; a missing file is not
+      if (attempt >= 3 || String(e).includes("pnpm wasm")) throw e;
+    }
+  }
+  call = loadRxc(module);
   if (import.meta.hot) import.meta.hot.data.call = call;
 }
 

@@ -6,7 +6,6 @@ import { noteFor, primsIn } from "./explain";
 import { presets } from "./presets";
 import { decode, encode } from "./share";
 import { formatSolid } from "./format";
-import "./style.css";
 
 const GUIDE = "https://github.com/solidjs/reactivescript/blob/main/guide/diagnostics.md";
 
@@ -22,16 +21,45 @@ function lineCol(text: string, line: number, column: number) {
   return Math.min(i + column, text.length);
 }
 
-function Playground(props: { initial: { files: Record<string, string>; active: string; preset?: string } }) {
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+  }
+  // the Clipboard API exists only on https and localhost; a LAN address over http needs the old copy command
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;opacity:0";
+  document.body.append(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+function Playground(props: { initial: { files: Record<string, string>; active: string; preset?: string }; compiler: Promise<void> }) {
   const [files, setFiles] = createSignal<Record<string, string>>(props.initial.files);
   const [active, setActive] = createSignal(props.initial.active);
   const [preset, setPreset] = createSignal(props.initial.preset ?? "");
-  const [copied, setCopied] = createSignal(false);
+  const [copied, setCopied] = createSignal("");
   const [explain, setExplain] = createSignal(true);
 
-  const result = createMemo(() => compile(files(), "dom"));
+  // "loading", "ready", or why the compiler did not load
+  const [compiler, setCompiler] = createSignal("loading");
+  props.compiler.then(
+    () => setCompiler("ready"),
+    (e) => setCompiler(String(e?.message ?? e)),
+  );
+  const ready = () => compiler() === "ready";
+  const result = createMemo(() => (ready() ? compile(files(), "dom") : { diagnostics: [], app: {}, projection: {}, ms: 0 }));
   const lastGood = createMemo<ReturnType<typeof compile> | undefined>((prev) => (result().app.modules ? result() : prev));
-  const stale = () => !result().app.modules;
+  const stale = () => ready() && !result().app.modules;
   const diagnostics = () => result().diagnostics;
   const failure = () => result().app.error;
   const modules = createMemo(() =>
@@ -42,9 +70,9 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
   const rawJsx = createMemo(() => modules().map((m) => m.jsx).join("\n\n"));
   const [solid, setSolid] = createSignal<{ raw: string; code: string; error?: string }>({ raw: "", code: "" });
   createEffect(
-    () => rawJsx(),
-    (raw) => {
-      Promise.all(modules().map((m) => formatSolid(m.jsx).then((r) => ({ ...r, code: m.path === ENTRY ? r.code : `// ${m.path}\n${r.code}` }))))
+    () => [rawJsx(), modules()] as const,
+    ([raw, mods]) => {
+      Promise.all(mods.map((m) => formatSolid(m.jsx).then((r) => ({ ...r, code: m.path === ENTRY ? r.code : `// ${m.path}\n${r.code}` }))))
         .then((rs) => rawJsx() === raw && setSolid({ raw, code: rs.map((r) => r.code).join("\n"), error: rs.find((r) => r.error)?.error }))
         .catch((e) => rawJsx() === raw && setSolid({ raw, code: raw, error: String(e?.message ?? e) }));
     },
@@ -116,9 +144,8 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
   const share = async () => {
     const hash = await encode({ files: files(), active: active() });
     history.replaceState(null, "", "#" + hash);
-    await navigator.clipboard?.writeText(location.href).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setCopied((await copyText(location.href)) ? "Link copied" : "Copy the address bar");
+    setTimeout(() => setCopied(""), 2000);
   };
 
   // the URL keeps the program, so a reload or a shared link opens it again
@@ -167,10 +194,10 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
         </label>
         <span class="spacer" />
         <span class="ms" data-testid="ms">
-          {result().ms.toFixed(1)} ms
+          {ready() ? `${result().ms.toFixed(1)} ms` : ""}
         </span>
         <button type="button" class="btn primary" onClick={share}>
-          {copied() ? "Link copied" : "Share"}
+          {copied() || "Share"}
         </button>
       </header>
 
@@ -217,7 +244,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
             <div class="label">
               Diagnostics <span class={`count${diagnostics().length ? " bad" : ""}`}>{diagnostics().length}</span>
             </div>
-            <Show when={diagnostics().length || failure()} fallback={<p class="ok">The checker accepts the program.</p>}>
+            <Show when={diagnostics().length || failure()} fallback={<p class={ready() ? "ok" : "loading"}>{ready() ? "The checker accepts the program." : ""}</p>}>
               <Show when={failure()}>{(f) => <pre class="err">{f()}</pre>}</Show>
               <ul>
                 <For each={diagnostics()} keyed={false}>
@@ -257,6 +284,17 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
             </p>
           </Show>
           <div class={`output${stale() ? " stale" : ""}`}>
+            <Show when={!ready()}>
+              <div class="loading" data-testid="loading">
+                <Show when={compiler() !== "loading"} fallback={<p>Loading the compiler…</p>}>
+                  <p>The compiler did not load.</p>
+                  <pre class="err">{compiler()}</pre>
+                  <button type="button" class="btn" onClick={() => location.reload()}>
+                    Retry
+                  </button>
+                </Show>
+              </div>
+            </Show>
             <pre class="code" data-testid="solid" innerHTML={codeHtml()} />
             <Show when={explain() && prims().length}>
               <div class="explain">
@@ -291,7 +329,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
 }
 
 async function start() {
-  await init();
+  const compiler = init();
   const fromHash = await decode(location.hash);
   const featured = presets.find((p) => p.id === (fromHash?.preset ?? "await")) ?? presets[0];
   const initial = fromHash?.files
@@ -299,9 +337,11 @@ async function start() {
     : { files: { ...featured.files }, active: "main.rx", preset: featured.id };
   const root = document.getElementById("app")!;
   root.textContent = "";
-  render(() => <Playground initial={initial} />, root);
+  render(() => <Playground initial={initial} compiler={compiler} />, root);
 }
 
 start().catch((e) => {
-  document.getElementById("app")!.innerHTML = `<pre class="err">The compiler did not load: ${String(e?.stack ?? e)}</pre>`;
+  const root = document.getElementById("app")!;
+  root.innerHTML = `<div class="loading"><p>The playground did not start.</p><pre class="err"></pre></div>`;
+  root.querySelector("pre")!.textContent = String(e?.message ?? e);
 });

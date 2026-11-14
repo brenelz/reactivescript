@@ -37,6 +37,10 @@ export function formatter() {
     ([prettier, babel, estree]) =>
       async (code: string) =>
         rejoin(await prettier.format(code, { parser: "babel", plugins: [babel, estree as any], printWidth: 100, useTabs: true })),
+    (e) => {
+      loaded = undefined;
+      throw e;
+    },
   ));
 }
 
