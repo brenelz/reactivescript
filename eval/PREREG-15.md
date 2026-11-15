@@ -33,7 +33,7 @@ All six arms have a hand-written reference that grades 0 on both tasks (see "Ref
 
 ## Builds (released only; exact versions filled in at freeze)
 
-- **Solid:** the first `@solidjs/signals` / `solid-js` 2.0 release candidate that contains #4856. It must also either contain the fix for #4859 or be recorded here as not containing it.
+- **Solid:** the first `@solidjs/signals` / `solid-js` 2.0 release candidate that contains #4856, #4859, #4888, #4889, #4897 and #4902 (all fixed on `next` by eafe671b6). #4904 (open when this was written) must be fixed in it or recorded here as not fixed.
 - **rxc:** a published `@reactivescript/compiler` built from the commit that freezes this file (bump release first).
 - **Exact:** a tagged Exact release (not a checkout). If Exact has none, then a pinned commit, named as a deviation.
 - **Foldkit:** the published 0.170.x, with Effect 4 as Foldkit pins it.
@@ -79,7 +79,8 @@ The direction is the claim. A null or reversed result is reported as plainly, an
 
 ## Known caveats (from writing the references)
 
-- **Board, .rx:** the guide's desk9 shape gives fuzz holes on board: each write refreshes its keyed list, and guesses on one list from separate actions end together (H-11, ruled). The .rx reference instead keeps one record of every write per page (passes, 547 lines). Agents who follow the guide's desk9 shape will lose points here. That counts as an agent/guide defect, not a test bug. The guide is not changed for round 15.
+- **Board, .rx:** the reference (`reference/board/rx-cols`, 429 lines) is the guide's shape: one keyed optimistic store per fetch (Ryan, 2026-11-15: store granularity = the fetch call), every write a guess into those stores, accepted writes re-asking the answers they changed, and an add's placeholder in the same store. An earlier reference that kept its own record of every write (`reference/board/rx`, 532 lines) was dropped, because references must be idiomatic and the app should not keep its own bookkeeping (Ryan, 2026-11-14 and 2026-11-15). Writing the reference changed the guide's async.md section "One store over the server" (8876be0, task-neutral examples) and made keys apply at any depth (ST-4a, c58dba7). This came from writing the reference, never from agent output, so board stays held out from agents. It is still not blind to the .rx authors, which the report states.
+- **Board, .rx move re-asks:** an accepted move re-asks the answers that hold the card now (read with `latest`), as well as its own columns. Re-asking only its own columns leaves a stale copy after two moves of one card (fuzz 2/60), and re-asking all three columns is worse (5/60). An agent has to see this to score 0 on board. Missing it is an agent defect.
 - **Board, Exact:** `parallel` hides an earlier send's failure once a later send concludes, and the brief clears a move error only when the next move starts. Idiomatic Contract cannot meet this (`parallel` takes no `then`), so the Exact reference keeps errors in its data module, the only way found. Recorded as an Exact limit that agents must work around; the test stays (Ryan, 2026-11-14).
 - **Board brief, unspecified but untested:**
   - a move into a column still loading;
@@ -90,16 +91,16 @@ The direction is the claim. A null or reversed result is reported as plainly, an
 - **Desk9 (from rounds 9 to 14):**
   - the fuzz server never returns a stale answer to a load that started before a write;
   - the 60 ms settle can hide late TanStack updates.
-- **Solid:** #4859 (a new key under `Loading on(key)` shows the old answer while a guess is out) was found by the .rx board reference. If the frozen Solid lacks the fix, .rx agents can hit it, and each such hole counts as a defect, attributed to Solid in the report.
+- **Solid:** the .rx board references found #4859, #4861 to #4864, #4871, #4874, #4888, #4889, #4897, #4902 and #4904. If the frozen Solid lacks a fix, .rx agents can hit that bug. Each such hole counts as a defect, attributed to Solid in the report.
 
 ## References (all grade 0)
 
 | task | rx | react | contract | xstate | foldkit | vanilla |
 |---|---|---|---|---|---|---|
 | desk9 (`--r15`) | 0 | 0 | 0 | 0 | 0 | 0 |
-| board (+40 extra seeds) | 0 (547 lines) | 0 (681) | 0 (510) | 0 (890) | 0 (1293) | 0 (752) |
+| board (+40 extra seeds) | 0 (429 lines, rx-cols) | 0 (681) | 0 (510) | 0 (890) | 0 (1293) | 0 (752) |
 
-`reference/desk9/*` and `reference/board/*`, graded on Solid `next` 57a7f422f, regraded at the gate.
+`reference/desk9/*` and `reference/board/*` (rx = `rx-cols`) were graded on Solid `next` 57a7f422f, except board rx, which was graded on eafe671b6. Its two excluded overlap failures are shared-list holds, and its one excluded hidden failure is H-11 (see `rx-cols/GRADE.txt`). All references are regraded at the gate.
 
 ## Review and cost
 
