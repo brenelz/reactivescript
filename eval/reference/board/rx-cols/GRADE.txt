@@ -1,4 +1,4 @@
-rx-cols (one keyed store per fetch), Solid next eafe671b6 (#4889, #4897, #4902 fixed), TASK=board FUZZ_ROUND=--r15
+rx-cols (one keyed store per fetch), Solid next b08afe5ce (#4889, #4897, #4902, #4904 fixed), TASK=board FUZZ_ROUND=--r15
 == hidden
 ✗ two adds show both, each taking its own id            (legal H-11)
 44/45 passed
@@ -10,6 +10,5 @@ rx-cols (one keyed store per fetch), Solid next eafe671b6 (#4889, #4897, #4902 f
 == fuzz (60 seeds)
 0/60
 Seed 41's count tear (a path guess lost once its row was moved into another store) was solidjs/solid#4902, fixed.
-Not hit by these seeds: solidjs/solid#4904 (a card moved into a column that just emptied renders as #undefined once every
-answer lands; needs rows reading rows[0], as the up button does). Fuzz seed 44 of a variant hit it; replaying that trail on
-this reference shows it too.
+Fuzz seed 44 of a variant found solidjs/solid#4904 (a card moved into a column that just emptied rendered as #undefined); fixed,
+and its replayed trail now shows the card on this reference.
