@@ -37,6 +37,8 @@ fn counted(cs: Card[] | null, id: number): Card[] | null => cs == null ? cs : cs
 fn withItem(l: List | null, card: number, it: Item): List | null =>
   l == null || l.card != card || l.items.some(x => x.id == it.id) ? l : { card: card, items: [...l.items, it] }
 fn has(cs: Card[] | null, id: number): boolean => cs != null && cs.some(c => c.id == id)
+fn holders(t: Card[] | null, d: Card[] | null, n: Card[] | null, id: number): string[] =>
+  [...(has(t, id) ? ["todo"] : []), ...(has(d, id) ? ["doing"] : []), ...(has(n, id) ? ["done"] : [])]
 
 // A move as the server makes it: the card leaves `from` and goes into `to` at `index`, counted without it.
 type Move = { id: number; from: string; to: string; index: number; row: Row }
@@ -179,8 +181,8 @@ export component BoardPage() {
       guess done := rs => shifted(rs, "done", m)
       onFlush(() => { moveError := "" })
       await moveCard(m.id, m.to, m.index)
-      // and the column the server had it in when it answered: another move of this card may have been answered first
-      await reask([from, m.from, m.to, has(latest todoSeen, m.id) ? "todo" : has(latest doingSeen, m.id) ? "doing" : "done"])
+      // and every column whose answer has it now: another move of this card may have been answered first
+      await reask([from, m.from, m.to, ...holders(latest todoSeen, latest doingSeen, latest doneSeen, m.id)])
     } catch (e) {
       moveError := e.message
       onFlush(() => { moveError := e.message })
