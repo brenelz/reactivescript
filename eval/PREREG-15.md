@@ -44,6 +44,7 @@ All six arms have a hand-written reference that grades 0 on both tasks (see "Ref
 ## Grading
 
 - **What counts:** only defects (Ryan, 2026-11-10). Holds that are by design (H-11) and failures the brief caused are excluded from every total. Each exclusion is listed with its trace.
+  - **Shared-list holds (Ryan, 2026-11-15):** two writes that guess the same list share its slots (#4724) and end together, so a declined one stays up, consistently, until the other ends. These are by-design holds and excluded like H-11. On board, the per-fetch .rx reference fails two overlap tests this way ("one of two moves declined puts back only its card", "a move into Doing that fills it while a move out is pending disables the rest"). Both are excluded, with traces.
 - **Defects per app:** failed hidden tests, plus failed overlap tests, plus fuzz seeds with a hole, with a task's tests and fuzz counted together (as `harness/grade.sh`).
 - **Fuzz rules,** the same for every arm:
   - **Same field written twice:** at rest, the field must show the server's last answer (Ryan, 2026-11-14, final). This is why `--r15` drops desk9's A2 allowance.
