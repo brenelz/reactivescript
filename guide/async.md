@@ -284,20 +284,26 @@ export action add(id: string, title: string) {
 
 ### One store over the server
 
-When several views show one kind of row (a board's columns, a list and its detail, a count), keep one store of them,
-not a copy per view:
+When the server answers a kind of row in several fetches (one list per status, per folder, per page), keep one keyed store
+per fetch, each the answer it stands for, row for row, and show each from its own store:
 
-- **Lay the answers flat in one keyed equation.** Each server answer stays a question of its own; one equation joins
-  them into one list with a `key`, and every view is a `filter` or a sort of it. A row is then one row wherever it
-  shows, and a guess on it shows in all of them.
-- **One write is one path guess on one row** (`guess rows[i].field := v`, "Writing one row of a list" above). Not a
-  guess on the whole list, and not one per view.
+- **A store per fetch, keyed.** `open key id = rowsOf(openAns catch (e) => null)`: the order on screen is the server's
+  order, and a row lives in exactly one store, so it shows once.
+- **An edit is one path guess on one row** (`guess open[i].title := t`, "Writing one row of a list" above), in the
+  store that shows the row. Not a guess on the whole list.
+- **A write that moves rows guesses each list it changes, as the server will make it.** A row moving between lists
+  leaves one and goes into another at an index: `guess open := rs => moved(rs, "open", m)` for each store. Two
+  such writes that change the same list share its slots (one write per differing index, #4724), so they end together:
+  a declined move stays up until the other one ends. Writes on lists they don't share stay apart.
+- When one write shows in several fetches (a title in a list and in a detail fetched on its own), or on a row that
+  may not be on screen yet, lay it over the answers instead ("Every view of a write" below).
 - **Work out positions in the handler and pass them in.** An index, a count, a place in the target: compute them in
   the handler from the screen (a snapshot, R-8) and pass them as arguments. An action that reads a value another
   action guessed and then guesses is one change with that action (H-11, Solid's D-33; solidjs/solid#4788): the two
   end together, so a declined write stays up until the other one ends.
 - **On accept, re-ask the answers that held the row and the one it joined.** Name them from the answers and the
-  action's arguments, not from the store, whose row already shows the guess. On a decline re-ask nothing: the guess
+  action's arguments, not from the store, whose row already shows the guess, and add the answer that holds the row
+  now (`latest`): another write of the same row may have been answered first. On a decline re-ask nothing: the guess
   reverts by itself.
 - **A create whose answer is the new row** writes that row into its answer source after the `await` (a source with a
   question takes a write until its next answer, ST-5a, so the row is never there twice). Until then guess a placeholder
