@@ -1,12 +1,11 @@
-rx-cols (one keyed store per column answer), Solid next fab8bd9a4, TASK=board FUZZ_ROUND=--r15
+rx-cols (one keyed store per fetch), Solid next f675c66cd + #4889 fix (4ea97b7bc), TASK=board FUZZ_ROUND=--r15
 == hidden
 ✗ two adds show both, each taking its own id            (legal H-11)
 44/45 passed
 == overlap
-✗ one of two moves declined puts back only its card     (moves touching one column share index slots, end together)
+✗ one of two moves declined puts back only its card     (two moves sharing two lists end together: by design)
 ✗ a toggle declined after another card was selected puts the first card's count back   (legal)
-✗ a move into Doing that fills it while a move out is pending disables the rest        (as the first, untraced)
+✗ a move into Doing that fills it while a move out is pending disables the rest        (as the first)
 23/26 passed
-== fuzz
-seeds 1-20: 2 holes (15, 17: an answered add's placeholder stays beside its card)
-seeds 21-60: 4 holes (24, 28 duplicate card; 36 two views; 41 count)
+== fuzz (60 seeds)
+3 holes: 15, 17 = solidjs/solid#4897; 41 = an item add declined after its card moved to another column's store (untraced)
