@@ -300,8 +300,10 @@ not a copy per view:
   action's arguments, not from the store, whose row already shows the guess. On a decline re-ask nothing: the guess
   reverts by itself.
 - **A create whose answer is the new row** writes that row into its answer source after the `await` (a source with a
-  question takes a write until its next answer, ST-5a, so the row is never there twice). Until then show a placeholder
-  from a guess list of its own, inert: no controls, since the server doesn't know its id yet.
+  question takes a write until its next answer, ST-5a, so the row is never there twice). Until then guess a placeholder
+  into the same store under a key minted on the client, so it sits where the row will. With a server id it is inert
+  (no controls, since the server doesn't know it yet) and is replaced by the real row; a client-minted id the server
+  keeps lets the placeholder be the row.
 - **Errors stay plain sources.** A guess reverts with its action; an error must outlive it.
 
 ## 4. Things that look like bugs and aren't

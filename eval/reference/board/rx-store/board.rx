@@ -10,9 +10,8 @@
 // there was only ever the guess, and removing it is the undo. Errors are plain client state under the guesses: a
 // refusal is a fact about one request, and no answer has a place for it.
 //
-// An add has no id until the server answers, so it has no row to guess on: its placeholder is guessed into a list of
-// its own (`adding`, shown under To do's cards) under a key minted here, for this visit only, and is inert (no move
-// buttons, not selectable). The server's answer is the new card itself, so the action records it in To do's answer (a
+// An add has no id until the server answers. Its placeholder is guessed into the store under a key minted here, for
+// this visit only, and is inert (no move buttons, not selectable). The server's answer is the new card itself, so the action records it in To do's answer (a
 // write whose answer is the new value re-asks nothing) and ends: in one frame the placeholder goes with its guess and
 // the real card shows from the truth. An added item is the same over the checklist's answer.
 //
@@ -106,9 +105,7 @@ export component BoardPage() {
 
   // 2. The one store over it, flat; every guess is a path write into it.
   board key id = [...rowsOf(todoSeen, "todo"), ...rowsOf(doingSeen, "doing"), ...rowsOf(doneSeen, "done")]
-  // 3. adds in flight: a new card has no row to guess on, so its placeholder is a guess list of its own, shown under To do
-  source adding: Row[] key id = []
-  todo = [...inCol(board, "todo"), ...adding]
+  todo = inCol(board, "todo")
   doing = inCol(board, "doing")
   done = inCol(board, "done")
   // each answer as the other panes read it: `null` while it loads or after it failed
@@ -188,9 +185,9 @@ export component BoardPage() {
     }
   }
 
-  action add(key: number, title: string) {
+  action add(key: number, title: string, at: number, pos: number) {
     try {
-      guess adding := as => [...as, { id: key, title: title, done: 0, total: 0, col: "todo", pos: 0, adding: true, gone: false }]
+      guess board[at] := { id: key, title: title, done: 0, total: 0, col: "todo", pos: pos, adding: true, gone: false }
       onFlush(() => { addError := "" })
       let r = await addCard("todo", title)
       todoAns := cs => withCard(cs, { id: r.id, title: r.title, done: 0, total: 0 })
@@ -272,7 +269,7 @@ export component BoardPage() {
                 newCard := ""
                 minted := n => n + 1
               })
-              add(key, t)
+              add(key, t, board.length, placeAt(todo, todo.length))
             }
           }}>add</button>
           {if addError != "" {
