@@ -57,5 +57,5 @@ test("a memo over an optimistic store misses a path guess while a row guess and 
   add(board.length); await tick();
   land("move", {}); await tick();                  // accepted: refreshes of a and b out
   rename(board.findIndex(r => r.id === 5), "FIVE"); await tick();
-  expect(state()).toBe("-1:new |1:one 5:FIVE  || FIVE");   // got "… || five": the column shows the guess, the memo's row doesn't   // got "… || five": the memo's row misses the guess
+  expect(state()).toBe("-1:new |1:one 5:FIVE  || FIVE");   // got "… || five": the column shows the guess, the memo's row doesn't
 });
