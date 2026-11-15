@@ -42,7 +42,14 @@ function unwrapFallback(v0: unknown): unknown { let v = v0; if (v instanceof Fal
  *  assigned.
  *  TODO(Solid rc.22): return the keyed answer from the derive and let Solid reconcile it, dropping this merge. On
  *  2.0.0-rc.21 that path throws in holdStaging (memo over latest() of the rows); fixed on Solid next (dba2aad). */
+const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
 function landDraft(draft: any, v: unknown, key: string | undefined) {
+  // ST-4a: the key applies at any depth, as Solid's: lists under a record land by key too
+  if (key && isRecord(v) && isRecord(draft)) {
+    for (const k of Object.keys(draft)) if (!(k in v)) delete draft[k];
+    for (const [k, x] of Object.entries(v)) { const d = draft[k]; if (x && typeof x === "object" && d && typeof d === "object" && Array.isArray(x) === Array.isArray(d)) landDraft(d, x, key); else if (d !== x) draft[k] = x; }
+    return;
+  }
   if (!key || !Array.isArray(v) || !Array.isArray(draft)) return assignDraft(draft, v);
   const had = new Map<unknown, any>(); for (const row of draft) if (row && typeof row === "object") had.set(row[key], row);
   v.forEach((x: any, i) => { const row = x && typeof x === "object" ? had.get(x[key]) : undefined; if (row) { mergeLeaves(row, x); if (draft[i] !== row) draft[i] = row; } else draft[i] = x; });
@@ -273,7 +280,7 @@ export class Oracle {
             const compute = this.computeOf(d.name, d.init, scope);
             if (this.optimisticTargets.has(d.name) && this.pathTargets.has(d.name)) {   // AC-3 path targets over ST-5 structured: createOptimisticStore(fn, seed) — the derive writes its draft; the setter guesses per key
               const derive = async (draft: any) => { const r = compute(draft); const v = r instanceof Flight ? await r.first : await r; landDraft(draft, v, d.key); };
-              const [store, setStore] = (createOptimisticStore as any)(derive, d.key ? [] : {}, d.key ? { key: d.key } : undefined);
+              const [store, setStore] = (createOptimisticStore as any)(derive, d.key && (d.init ?? d.e)?.k !== "rec" ? [] : {}, d.key ? { key: d.key } : undefined);
               const plain = () => { throw new Unsupported("a plain write to an optimistic store"); };
               scope.vars.set(d.name, { k: "store", get: () => store, set: plain, setPath: plain, question: true, setGuess: setStore });
             }
@@ -310,7 +317,7 @@ export class Oracle {
             const plain = () => { throw new Unsupported("a plain write to an equation"); };
             if (this.pathTargets.has(d.name) || d.key) {
               const derive = async (draft: any) => { const r = compute(draft); const v = r instanceof Flight ? await r.first : await r; landDraft(draft, v, d.key); };
-              const [store, setStore] = (createOptimisticStore as any)(derive, d.key ? [] : {}, d.key ? { key: d.key } : undefined);
+              const [store, setStore] = (createOptimisticStore as any)(derive, d.key && (d.init ?? d.e)?.k !== "rec" ? [] : {}, d.key ? { key: d.key } : undefined);
               scope.vars.set(d.name, { k: "store", get: () => store, set: plain, setPath: plain, question: true, setGuess: setStore });
             } else {
               const [get, setGuess] = createOptimistic(compute as any, this.loadingValue(d.e, scope) as any);

@@ -982,7 +982,7 @@ impl<'p> Gen<'p> {
             }
             Decl::Source { name, init, key, .. } => {
                 let lv = self.loading_value(init, env)?;
-                let mode = obj(vec![("optimistic", E::Bool(self.u.optimistic.contains(name))), ("structured", E::Bool(self.u.paths.contains(name)))]);
+                let mode = obj(vec![("optimistic", E::Bool(self.u.optimistic.contains(name))), ("structured", E::Bool(self.u.paths.contains(name))), ("record", E::Bool(matches!(init.k, ExprKind::Rec(_))))]);
                 let x = self.expr(init, env, &Ctx { tail: true, self_: Some(name.clone()), ..Ctx::default() })?;
                 let mut args = vec![str(name.clone()), arrow(&["__prev"], x), lv, mode];
                 if let Some(k) = key {
@@ -995,7 +995,9 @@ impl<'p> Gen<'p> {
             Decl::Eq { name, e, key, deferred, .. } if self.guessed_eq(name, e, *deferred) => {
                 // AC-3 over an equation: createOptimistic(fn) / createOptimisticStore(fn, seed) — derived, its setter only guesses
                 let lv = self.loading_value(e, env)?;
-                let mode = obj(vec![("optimistic", E::Bool(true)), ("structured", E::Bool(self.u.paths.contains(name) || key.is_some())), ("derived", E::Bool(true))]);
+                // ST-4a: a key applies at any depth (Solid's); a record result is the store's root, its keyed lists inside it
+                let record = matches!(e.k, ExprKind::Rec(_));
+                let mode = obj(vec![("optimistic", E::Bool(true)), ("structured", E::Bool(self.u.paths.contains(name) || key.is_some())), ("derived", E::Bool(true)), ("record", E::Bool(record))]);
                 let x = self.expr(e, env, &Ctx { tail: true, self_: Some(name.clone()), ..Ctx::default() })?;
                 let mut args = vec![str(name.clone()), arrow(&["__prev"], x), lv, mode];
                 if let Some(k) = key {
@@ -1037,7 +1039,7 @@ impl<'p> Gen<'p> {
                 }
                 if let Some(k) = key {
                     let x = self.expr(e, env, &Ctx { tail: true, ..Ctx::default() })?;
-                    return fin(vec![konst(b.js.clone(), rtc("keyed", vec![str(name.clone()), str(k.clone()), thunk(x)]))], self);
+                    return fin(vec![konst(b.js.clone(), rtc("keyed", vec![str(name.clone()), str(k.clone()), thunk(x), E::Bool(matches!(e.k, ExprKind::Rec(_)))]))], self);
                 }
                 // R-f-4 over a tail await: the flight is an inner memo, read through a boundary
                 if let (ExprKind::Catch { e: ce, name: cn, classes, alt }, false) = (&e.k, deferred) {

@@ -63,6 +63,9 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   per-key path updates (their readers run only for changed keys); new keys
   create, missing keys remove; a reorder moves rows (S-store-3). `pending?`
   and `latest` on an element follow the key.
+  The key applies at any depth, as Solid's: on a record (`x key k = { a: …,
+  b: … }`) every list inside it is reconciled by `k` (taken by default,
+  2026-11-15).
 - **ST-4b.** `for u in x` over a keyed collection uses the key for row
   identity (RG-2a). A collection derived from a keyed one by selection
   (`filter(rows, …)`) keeps the rows' identity and needs no key of its own;

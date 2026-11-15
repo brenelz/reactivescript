@@ -138,9 +138,9 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
       if (typeof init === "object" && init !== null) { const [store] = createStore(init as any); const [get] = createSignal<unknown>(store); return ro(get as Acc); }
       const [get] = createSignal(init); return ro(get as Acc);
     },
-    question(name: string, compute: (prev: unknown) => unknown, o: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean }, key?: string): [Acc, Writer] {
+    question(name: string, compute: (prev: unknown) => unknown, o: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean; record?: boolean }, key?: string): [Acc, Writer] {
       const fn = named(name, compute);
-      if (mode.optimistic && mode.structured) { const [store] = (createOptimisticStore as any)((draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); landDraft(draft, r, key); }, key ? [] : {}, key ? { key } : undefined); return ro(() => store); }
+      if (mode.optimistic && mode.structured) { const [store] = (createOptimisticStore as any)((draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); landDraft(draft, r, key); }, key && !mode.record ? [] : {}, key ? { key } : undefined); return ro(() => store); }
       if (mode.optimistic && mode.derived) { const [get] = createOptimistic(fn as any, o as any); return ro(get as Acc); }   // AC-3 over an equation: the client's createOptimistic(fn), so the owner trees (and hydration keys) match
       if (mode.optimistic) { const [truth] = createSignal(fn as any, o as any); const [get] = createOptimistic(() => (truth as Acc)()); return ro(get as Acc); }
       if (mode.structured) {
@@ -151,7 +151,7 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
     },
     memo: (name: string | null, fn: (prev: unknown) => unknown, o?: { loadingValue?: unknown }): Acc => createMemo(named(name, fn) as any, o as any) as Acc,
     deferred: (name: string, fn: (prev: unknown) => unknown, o?: { loadingValue?: unknown }): Acc => createDeferred(named(name, fn) as any, o as any) as Acc,
-    keyed: (name: string, key: string, fn: () => unknown): Acc => { const src = createMemo(named(name, () => fn()) as any); const p = createProjection(() => (src as Acc)() as any, [] as any, { key } as any); return () => p; },
+    keyed: (name: string, key: string, fn: () => unknown, record = false): Acc => { const src = createMemo(named(name, () => fn()) as any); const p = createProjection(() => (src as Acc)() as any, (record ? {} : []) as any, { key } as any); return () => p; },
     draft: (seed: unknown, body: (d: any) => void): Acc => { const p = createProjection(body as any, seed as any); return () => p; },
     pre: (get: Acc): Acc => { const m = createMemo((st: any) => ({ cur: get(), prev: st ? st.cur : undefined })); return () => (m() as { prev: unknown }).prev; },
     firstPaint: (f: () => unknown) => ({ loadingValue: untrack(f) }),
@@ -250,7 +250,14 @@ export type ServerApp = ReturnType<typeof createApp>;
  *  assigned.
  *  TODO(Solid rc.22): return the keyed answer from the derive and let Solid reconcile it, dropping this merge. On
  *  2.0.0-rc.21 that path throws in holdStaging (memo over latest() of the rows); fixed on Solid next (dba2aad). */
+const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
 function landDraft(draft: any, v: unknown, key: string | undefined) {
+  // ST-4a: the key applies at any depth, as Solid's: lists under a record land by key too
+  if (key && isRecord(v) && isRecord(draft)) {
+    for (const k of Object.keys(draft)) if (!(k in v)) delete draft[k];
+    for (const [k, x] of Object.entries(v)) { const d = draft[k]; if (x && typeof x === "object" && d && typeof d === "object" && Array.isArray(x) === Array.isArray(d)) landDraft(d, x, key); else if (d !== x) draft[k] = x; }
+    return;
+  }
   if (!key || !Array.isArray(v) || !Array.isArray(draft)) return assignDraft(draft, v);
   const had = new Map<unknown, any>(); for (const row of draft) if (row && typeof row === "object") had.set(row[key], row);
   v.forEach((x: any, i) => { const row = x && typeof x === "object" ? had.get(x[key]) : undefined; if (row) { mergeLeaves(row, x); if (draft[i] !== row) draft[i] = row; } else draft[i] = x; });

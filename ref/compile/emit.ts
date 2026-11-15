@@ -323,13 +323,13 @@ class Gen {
     if (d.k === "source") {
       if (!d.question) return `${pad}const [${b.js}, ${b.w}] = __rt.source(${J(d.name)}, __rt.untrack(() => ${this.expr(d.init, env, { imp: false })}));\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
       const lv = this.loadingValue(d.init, env);
-      const mode = `{ optimistic: ${this.u.optimistic.has(d.name)}, structured: ${this.u.paths.has(d.name)} }`;
+      const mode = `{ optimistic: ${this.u.optimistic.has(d.name)}, structured: ${this.u.paths.has(d.name)}, record: ${d.init.k === "rec"} }`;
       return `${pad}const [${b.js}, ${b.w}] = __rt.question(${J(d.name)}, (__prev) => ${this.expr(d.init, env, { imp: false, tail: true, self: d.name })}, ${lv}, ${mode}${d.key ? `, ${J(d.key)}` : ""});\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
     }
     if (d.k !== "eq") throw new CompileError("unreachable");
     if (this.guessedEq(d)) {                                                                   // AC-3 over an equation: createOptimistic(fn) / createOptimisticStore(fn, seed) — derived, its setter only guesses
       const lv = this.loadingValue(d.e, env);
-      const mode = `{ optimistic: true, structured: ${this.u.paths.has(d.name) || !!d.key}, derived: true }`;
+      const mode = `{ optimistic: true, structured: ${this.u.paths.has(d.name) || !!d.key}, derived: true, record: ${d.e.k === "rec"} }`;
       return `${pad}const [${b.js}, ${b.w}] = __rt.question(${J(d.name)}, (__prev) => ${this.expr(d.e, env, { imp: false, tail: true, self: d.name })}, ${lv}, ${mode}${d.key ? `, ${J(d.key)}` : ""});\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
     }
     const reg = `\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js} });${prev}`;
@@ -340,7 +340,7 @@ class Gen {
     }
     if (d.e.k === "call" && d.e.f.k === "id" && env.lookup(d.e.f.name)?.kind === "ifn") return `${pad}const ${b.js} = ${this.instantiate(d.e, env)};${reg}`;   // RG-6
     const fx = this.foreign(d, env, b, pad); if (fx !== null) return `${fx}${reg}`;
-    if (d.key) return `${pad}const ${b.js} = __rt.keyed(${J(d.name)}, ${J(d.key)}, () => ${this.expr(d.e, env, { imp: false, tail: true })});${reg}`;
+    if (d.key) return `${pad}const ${b.js} = __rt.keyed(${J(d.name)}, ${J(d.key)}, () => ${this.expr(d.e, env, { imp: false, tail: true })}, ${d.e.k === "rec"});${reg}`;
     if (d.e.k === "catch" && !d.deferred) {                                                    // R-f-4 over a tail await: the flight is an inner memo, read through a boundary
       const c = d.e; const inner = new Env(env); if (c.name) inner.vars.set(c.name, { kind: "val", js: mg(c.name) });
       return `${pad}const i$${d.name} = __rt.memo(${J(d.name)}, (__prev) => ${this.expr(c.e, env, { imp: false, tail: true, self: d.name })}, ${this.loadingValue(c.e, env)});\n${pad}const ${b.js} = __rt.catchMemo(() => i$${d.name}(), (__e) => __rt.isA(__e, ${this.classes(c.classes, env)}), (${c.name ? mg(c.name) : "__e"}) => ${this.expr(c.alt, inner, { imp: false })});${reg}`;
