@@ -57,11 +57,3 @@ D-34): it logs the guess once and nothing after, since the re-ask confirms it.
 | 4 | resolve "d" {"title":"Old"} | `x` | — |
 | 5 | resolve "save" 0 | `x` | — |
 | 6 | resolve "d" {"title":"New"} | `x` | — |
-
-## Divergences (DV-20)
-
-- oracle "Variant: read by an effect alone" instant 5: `x` effects `log(Old)`
-- oracle "Variant: read by an effect alone" instant 6: `x` effects `log(New)`
-
-Found reviewing PR #31: an effect over a source nothing renders is a legal `.rx` program, so #4690 is reachable.
-Fixed on `next` (2026-11-05); the divergence stays recorded until the repin.
