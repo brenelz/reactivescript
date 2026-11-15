@@ -33,7 +33,7 @@ All six arms have a hand-written reference that grades 0 on both tasks (see "Ref
 
 ## Builds (released only; exact versions filled in at freeze)
 
-- **Solid:** the first `@solidjs/signals` / `solid-js` 2.0 release candidate that contains #4856, #4859, #4888, #4889, #4897 and #4902 (all fixed on `next` by eafe671b6). #4904 (open when this was written) must be fixed in it or recorded here as not fixed.
+- **Solid:** the first `@solidjs/signals` / `solid-js` 2.0 release candidate that contains #4856, #4859, #4888, #4889, #4897, #4902 and #4904 (all fixed on `next` by b08afe5ce).
 - **rxc:** a published `@reactivescript/compiler` built from the commit that freezes this file (bump release first).
 - **Exact:** a tagged Exact release (not a checkout). If Exact has none, then a pinned commit, named as a deviation.
 - **Foldkit:** the published 0.170.x, with Effect 4 as Foldkit pins it.
@@ -100,7 +100,7 @@ The direction is the claim. A null or reversed result is reported as plainly, an
 | desk9 (`--r15`) | 0 | 0 | 0 | 0 | 0 | 0 |
 | board (+40 extra seeds) | 0 (429 lines, rx-cols) | 0 (681) | 0 (510) | 0 (890) | 0 (1293) | 0 (752) |
 
-`reference/desk9/*` and `reference/board/*` (rx = `rx-cols`) were graded on Solid `next` 57a7f422f, except board rx, which was graded on eafe671b6. Its two excluded overlap failures are shared-list holds, and its one excluded hidden failure is H-11 (see `rx-cols/GRADE.txt`). All references are regraded at the gate.
+`reference/desk9/*` and `reference/board/*` (rx = `rx-cols`) were graded on Solid `next` 57a7f422f, except board rx, which was graded on b08afe5ce. Its two excluded overlap failures are shared-list holds, and its one excluded hidden failure is H-11 (see `rx-cols/GRADE.txt`). All references are regraded at the gate.
 
 ## Review and cost
 
