@@ -10,11 +10,14 @@
 // there was only ever the guess, and removing it is the undo. Errors are plain client state under the guesses: a
 // refusal is a fact about one request, and no answer has a place for it.
 //
-// An add has no id until the server answers. Its placeholder is guessed into the store under a key minted here, for
-// this visit only, and is inert (no move buttons, not selectable). The server's answer is the new card itself, so the
-// action records it in To do's answer (a write whose answer is the new value re-asks nothing) and ends: in one frame
-// the placeholder goes with its guess and the real card shows from the truth. An added item is the same over the
-// checklist's answer.
+// An add has no id until the server answers, so it has no row to guess on: its placeholder is guessed into a list of
+// its own (`adding`, shown under To do's cards) under a key minted here, for this visit only, and is inert (no move
+// buttons, not selectable). The server's answer is the new card itself, so the action records it in To do's answer (a
+// write whose answer is the new value re-asks nothing) and ends: in one frame the placeholder goes with its guess and
+// the real card shows from the truth. An added item is the same over the checklist's answer.
+//
+// Indexes, places and columns are worked out in the handler, from the board as shown, and passed in: an action that
+// read the store another action guessed on would be one change with it (D-33).
 //
 // Everything here is the visit's: the page is mounted only while it is open, so leaving it discards the store, its
 // guesses and its errors, and opening it again asks the server again.
@@ -103,7 +106,9 @@ export component BoardPage() {
 
   // 2. The one store over it, flat; every guess is a path write into it.
   board key id = [...rowsOf(todoSeen, "todo"), ...rowsOf(doingSeen, "doing"), ...rowsOf(doneSeen, "done")]
-  todo = inCol(board, "todo")
+  // 3. adds in flight: a new card has no row to guess on, so its placeholder is a guess list of its own, shown under To do
+  source adding: Row[] key id = []
+  todo = [...inCol(board, "todo"), ...adding]
   doing = inCol(board, "doing")
   done = inCol(board, "done")
   // each answer as the other panes read it: `null` while it loads or after it failed
@@ -146,11 +151,13 @@ export component BoardPage() {
   }
 
   // An accepted card write ends by re-asking the answers it changed: for a move the one that held the card and the
-  // one it joined, for an edit the one that holds it.
-  action reask(a: string, b: string) {
-    if (a == "todo" || b == "todo") { refresh todoAns }
-    if (a == "doing" || b == "doing") { refresh doingAns }
-    if (a == "done" || b == "done") { refresh doneAns }
+  // one it joined, for an edit the one that holds it. Which answer holds it is read in the handler, as committed, and
+  // an accepted move still re-asking is not committed yet (its answers land together), so the column the card shows
+  // in is re-asked too, which is where that move put it.
+  action reask(cols: string[]) {
+    if (cols.includes("todo")) { refresh todoAns }
+    if (cols.includes("doing")) { refresh doingAns }
+    if (cols.includes("done")) { refresh doneAns }
   }
 
   action retry(col: string) {
@@ -168,23 +175,22 @@ export component BoardPage() {
 
   // The place is worked out by the click, from the board as shown, as the example's `nudge` does: an action that read
   // another action's guess and guessed beside it would be one change with it (D-33).
-  action move(id: number, from: string, col: string, index: number, pos: number) {
+  action move(i: number, id: number, from: string, shown: string, col: string, index: number, pos: number) {
     try {
-      let i = board.findIndex(r => r.id == id)
       guess board[i].col := col
       guess board[i].pos := pos
       onFlush(() => { moveError := "" })
       await moveCard(id, col, index)
-      await reask(from, col)
+      await reask([from, shown, col])
     } catch (e) {
       moveError := e.message
       onFlush(() => { moveError := e.message })
     }
   }
 
-  action add(key: number, title: string, at: number, pos: number) {
+  action add(key: number, title: string) {
     try {
-      guess board[at] := { id: key, title: title, done: 0, total: 0, col: "todo", pos: pos, adding: true, gone: false }
+      guess adding := as => [...as, { id: key, title: title, done: 0, total: 0, col: "todo", pos: 0, adding: true, gone: false }]
       onFlush(() => { addError := "" })
       let r = await addCard("todo", title)
       todoAns := cs => withCard(cs, { id: r.id, title: r.title, done: 0, total: 0 })
@@ -194,21 +200,19 @@ export component BoardPage() {
     }
   }
 
-  action rename(id: number, title: string, col: string) {
-    let i = board.findIndex(r => r.id == id)
+  action rename(i: number, id: number, title: string, col: string, shown: string) {
     try {
       guess board[i].title := title
       onFlush(() => { renameError := "" })
       await renameCard(id, title)
-      await reask(col, col)
+      await reask([col, shown])
     } catch (e) {
       renameError := e.message
       onFlush(() => { renameError := e.message })
     }
   }
 
-  action archive(id: number, col: string) {
-    let i = board.findIndex(r => r.id == id)
+  action archive(i: number, id: number, col: string, shown: string) {
     try {
       guess board[i].gone := true
       onFlush(() => {
@@ -216,31 +220,28 @@ export component BoardPage() {
         archiveError := ""
       })
       await archiveCard(id)
-      await reask(col, col)
+      await reask([col, shown])
     } catch (e) {
       archiveError := e.message
       onFlush(() => { archiveError := e.message })
     }
   }
 
-  action toggle(card: number, item: number, to: boolean, col: string) {
+  action toggle(i: number, j: number, card: number, item: number, to: boolean, col: string, shown: string) {
     try {
-      let i = board.findIndex(r => r.id == card)
-      let j = checklist.findIndex(it => it.id == item)
       guess checklist[j].done := to
       guess board[i].done := n => n + (to ? 1 : -1)
       onFlush(() => { itemError := "" })
       await toggleItem(card, item, to)
       refresh listAns
-      await reask(col, col)
+      await reask([col, shown])
     } catch (e) {
       itemError := e.message
       onFlush(() => { itemError := e.message })
     }
   }
 
-  action addLine(card: number, key: number, text: string) {
-    let i = board.findIndex(r => r.id == card)
+  action addLine(i: number, card: number, key: number, text: string) {
     try {
       guess checklist := ls => [...ls, { id: key, text: text, done: false, adding: true }]
       guess board[i].total := n => n + 1
@@ -260,7 +261,7 @@ export component BoardPage() {
     <div style="display: flex; gap: 1.5rem; align-items: flex-start">
       <div>
         <Column col="todo" ans={todoAns} rows={todo} retrying={pending? todoAns} left="" right="doing" leftOpen={false} rightOpen={intoDoing}
-          onRetry={() => { retry("todo") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(id, home(id), p.col, p.index, p.pos) }} />
+          onRetry={() => { retry("todo") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(board.findIndex(r => r.id == id), id, home(id), board.find(r => r.id == id)?.col ?? "", p.col, p.index, p.pos) }} />
         <div>
           <input data-testid="new-card" value={newCard} onInput={e => { newCard := e.target.value }} placeholder="new card" />{" "}
           <button data-testid="add-card" disabled={!todoUp} onClick={() => {
@@ -271,7 +272,7 @@ export component BoardPage() {
                 newCard := ""
                 minted := n => n + 1
               })
-              add(key, t, board.length, placeAt(todo, todo.length))
+              add(key, t)
             }
           }}>add</button>
           {if addError != "" {
@@ -280,9 +281,9 @@ export component BoardPage() {
         </div>
       </div>
       <Column col="doing" ans={doingAns} rows={doing} retrying={pending? doingAns} left="todo" right="done" leftOpen={todoUp} rightOpen={doneUp}
-        onRetry={() => { retry("doing") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(id, home(id), p.col, p.index, p.pos) }} />
+        onRetry={() => { retry("doing") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(board.findIndex(r => r.id == id), id, home(id), board.find(r => r.id == id)?.col ?? "", p.col, p.index, p.pos) }} />
       <Column col="done" ans={doneAns} rows={done} retrying={pending? doneAns} left="doing" right="" leftOpen={intoDoing} rightOpen={false}
-        onRetry={() => { retry("done") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(id, home(id), p.col, p.index, p.pos) }} />
+        onRetry={() => { retry("done") }} onSelect={id => { pick(id) }} onMove={(id, c, by) => { let p = placeOf(board, id, c, by); move(board.findIndex(r => r.id == id), id, home(id), board.find(r => r.id == id)?.col ?? "", p.col, p.index, p.pos) }} />
       <section data-testid="detail" style="min-width: 16rem">
         {if sel == null {
           <p>select a card</p>
@@ -295,10 +296,10 @@ export component BoardPage() {
               if (titleInput != "") {
                 let t = titleInput
                 onFlush(() => { titleInput := "" })
-                rename(sel.id, t, home(sel.id))
+                rename(board.findIndex(r => r.id == sel.id), sel.id, t, home(sel.id), sel.col)
               }
             }}>rename</button>{" "}
-            <button data-testid="archive" onClick={() => { archive(sel.id, home(sel.id)) }}>archive</button>
+            <button data-testid="archive" onClick={() => { archive(board.findIndex(r => r.id == sel.id), sel.id, home(sel.id), sel.col) }}>archive</button>
           </div>
           {if renameError != "" {
             <p>rename error: {renameError}</p>
@@ -313,7 +314,10 @@ export component BoardPage() {
                         <span data-testid="item">[ ] {it.text} (adding…)</span>
                       } else {
                         <span data-testid="item">[{it.done ? "x" : " "}] {it.text}</span>{" "}
-                        <button data-testid="toggle" disabled={pending? checklist} onClick={() => { toggle(sel.id, it.id, !it.done, home(sel.id)) }}>toggle</button>
+                        <button data-testid="toggle" disabled={pending? checklist} onClick={() => {
+                          // `disabled` reads false while a newly selected card's checklist loads (05 DV-22); the handler reads true
+                          if (!(pending? checklist)) { toggle(board.findIndex(r => r.id == sel.id), checklist.findIndex(x => x.id == it.id), sel.id, it.id, !it.done, home(sel.id), sel.col) }
+                        }}>toggle</button>
                       }}
                     </li>
                   }}
@@ -321,14 +325,14 @@ export component BoardPage() {
                 <p data-testid="progress">{checklist.filter(it => it.done).length}/{checklist.length} done</p>
                 <input data-testid="item-input" value={itemInput} onInput={e => { itemInput := e.target.value }} placeholder="new item" />{" "}
                 <button data-testid="add-item" disabled={pending? checklist} onClick={() => {
-                  if (itemInput != "") {
+                  if (itemInput != "" && !(pending? checklist)) {
                     let t = itemInput
                     let key = -(minted + 1)
                     onFlush(() => {
                       itemInput := ""
                       minted := n => n + 1
                     })
-                    addLine(sel.id, key, t)
+                    addLine(board.findIndex(r => r.id == sel.id), sel.id, key, t)
                   }
                 }}>add item</button>
               }}

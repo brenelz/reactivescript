@@ -22,7 +22,8 @@
 //   card where it showed it cannot know an order the server made from answers it applied in another order.
 // - B3 (H-11, as desk9's A5: a switch made while work is in flight may hold): while anything is in the air, the
 //   detail may still show a card selected earlier in that busy period, checked against that card; and an add's
-//   "(adding…)" row may stay after its answer (accepted or declined) while other work is in the air. At rest neither.
+//   "(adding…)" row may stay after its answer (accepted or declined) while other work is in the air; and a card's
+//   count may keep a declined toggle or item add while other work is in the air. At rest none of these.
 // - Two accepted writes to one field: settled, the field must show the server's last answer (Ryan, 2026-11-14).
 // Usage: node harness/fuzz-board.mjs <dir> [--seeds N] [--steps N] [--from S] [--json out.json] [--log]
 // (--r9 and --r15 are accepted and ignored, so harness/grade.sh can pass its round flag.)
@@ -107,6 +108,7 @@ async function session(browser, url, seed, steps, log) {
   let lateVisit = false;                 // B1
   let looseOrder = false;                // B2
   const heldSel = new Set();             // B3: selections made while something was in the air
+  const heldDeclined = [];               // B3: declined toggles and item adds in this busy period (their card's count may keep them)
   const trail = []; const found = [];
   let made = 0;   // added cards and items get distinct texts: two adds of one text would be one flight to the harness
   const pending = () => page.evaluate(() => globalThis.__flights.pending());
@@ -150,7 +152,7 @@ async function session(browser, url, seed, steps, log) {
       for (const x of c.rows) if (!x.adding) { if (seen.has(x.id) && !lateVisit) note("duplicate card", `#${x.id} shows in ${seen.get(x.id)} and ${col}`); seen.set(x.id, col); }
     }
     const busy = (await pending()).length > 0;
-    if (!busy) heldSel.clear();
+    if (!busy) { heldSel.clear(); heldDeclined.length = 0; }
     const placeholders = COLS.flatMap(col => (b[col]?.rows ?? []).filter(x => x.adding).map(x => x.title));
     const addsOut = (await pending()).filter(k => k.startsWith("addCard:")).map(k => k.slice(k.indexOf(",") + 1));
     for (const t of new Set(placeholders)) {
@@ -164,7 +166,8 @@ async function session(browser, url, seed, steps, log) {
       for (const col of COLS) for (const x of b[col]?.rows ?? []) {
         if (x.adding) continue;
         const xs = srv.items[x.id] ?? [], sd = xs.filter(y => y.done).length;
-        const t = out.filter(k => k.startsWith(`toggleItem:${x.id},`)).length, ad = out.filter(k => k.startsWith(`addItem:${x.id},`)).length;
+        const mine = [...out, ...heldDeclined];   // B3: a declined one may still show while other work is in the air
+        const t = mine.filter(k => k.startsWith(`toggleItem:${x.id},`)).length, ad = mine.filter(k => k.startsWith(`addItem:${x.id},`)).length;
         if (x.total < xs.length || x.total > xs.length + ad || x.done < sd - t || x.done > sd + t) note("card count", `card "${x.text}", server ${sd}/${xs.length} with ${t} toggle(s) and ${ad} item add(s) of it in the air`);
       }
     }
@@ -218,6 +221,7 @@ async function session(browser, url, seed, steps, log) {
     settledCount.set(key, (settledCount.get(key) ?? 0) + times);
     let a; for (let t = 0; t < times; t++) a = answer(srv, key, fail);
     if (WRITES.has(name) && !a.fail && writeVisit.get(key) !== ui.visit) lateVisit = true;   // B1
+    if (a.fail && (name === "toggleItem" || name === "addItem")) heldDeclined.push(key);    // B3
     writeVisit.delete(key);
     trail.push(`${a.fail ? "fail" : "land"} ${key}`);
     await page.evaluate(([k, a]) => a.fail ? globalThis.__flights.fail(k, "declined") : globalThis.__flights.land(k, a.value), [key, a]);
