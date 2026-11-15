@@ -8,4 +8,4 @@ rx-cols (one keyed store per fetch), Solid next f675c66cd + #4889 fix (4ea97b7bc
 ✗ a move into Doing that fills it while a move out is pending disables the rest        (as the first)
 23/26 passed
 == fuzz (60 seeds)
-3 holes: 15, 17 = solidjs/solid#4897; 41 = an item add declined after its card moved to another column's store (untraced)
+3 holes: 15, 17 = solidjs/solid#4897; 41 = a declined item add stays in the checklist, solidjs/solid#4897 (declined variant)
