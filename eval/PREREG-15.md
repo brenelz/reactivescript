@@ -64,6 +64,8 @@ Ryan started the round on rc.23 and waived two steps, so that the round would no
 - **Gate:** not rerun on rc.23. rc.23 is `next` f57cc89fe plus a version bump and a size re-record (8c34a505a). On f57cc89fe, both .rx references graded 0: desk9 77/77, 38/38, 0/20; board 44/45 and 23/26 (only the excluded holds), fuzz 0/120 seeds. The other ten references don't use Solid. They graded 0 on the fuzzers before the two fuzz changes above, which only remove false holes.
 - **Outside review:** not done before the runs. The review happens after, on this file as frozen.
 - **rxc:** not published before the runs. The binary is built from the freezing commit.
+- **Prompt delivery:** each agent is told to read its desk's `.prompt` (written by `scaffold.mjs`, the round 12 prompt per arm) in full and follow it, instead of getting the text pasted in. That costs one read, the same for every arm.
+- **Concurrency:** the runs go two at a time on one 4-CPU machine, in the order in `runs/r15/.order` (a seed-15 shuffle of the 144 desks). Time per run is taken from each agent's transcript.
 
 ## Runs
 
