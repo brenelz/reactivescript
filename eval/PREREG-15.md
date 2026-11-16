@@ -1,6 +1,6 @@
 # Round 15: six arms, two tasks, two tiers, for publication
 
-Pre-registration, committed before any round 15 agent runs. Status: DRAFT (needs Ryan's review; nothing here is frozen yet).
+Pre-registration, committed before any round 15 agent runs. Status: FROZEN 2026-11-16 (Ryan: "It's round 15 time"). The deviations are listed under "Freeze".
 
 ## Why
 
@@ -31,15 +31,15 @@ All six arms have a hand-written reference that grades 0 on both tasks (see "Ref
 - **`desk9`** (`brief-plain.md`), unchanged since round 12. Graded by `hidden.mjs` (77), `hidden-overlap.mjs` (38) and `fuzz.mjs --r15`, 20 seeds. The guide was tuned against this task over rounds 9 to 14, so it is not held out. It is reported as the familiar task.
 - **`board`** (`brief-plain.md`), a sprint board: cards across three columns, moves and reordering, a work-in-progress limit, each card's checklist, renames, adds, an archive page, and overlapping writes. It is new and held out: no .rx, guide or Solid change was made while looking at agent output for it. Graded by `hidden.mjs` (45), `hidden-overlap.mjs` (26) and `fuzz-board.mjs`, 20 seeds. Agents see `visible.mjs` (26).
 
-## Builds (released only; exact versions filled in at freeze)
+## Builds (released only)
 
-- **Solid:** the first `@solidjs/signals` / `solid-js` 2.0 release candidate that contains #4856, #4859, #4888, #4889, #4897, #4902 and #4904 (all fixed on `next` by b08afe5ce).
-- **rxc:** a published `@reactivescript/compiler` built from the commit that freezes this file (bump release first).
-- **Exact:** a tagged Exact release (not a checkout). If Exact has none, then a pinned commit, named as a deviation.
-- **Foldkit:** the published 0.170.x, with Effect 4 as Foldkit pins it.
-- **React / XState:** as installed in round 12 (react 19, xstate 5.32.6, @xstate/react 6.1.0, @tanstack/react-query 5).
+- **Solid:** `solid-js`, `@solidjs/signals`, `@solidjs/web` and `@solidjs/compiler` 2.0.0-rc.23 from npm (tag commit 8c34a505a, 2026-11-16). It contains #4856, #4859, #4888, #4889, #4897, #4902, #4904, #4907, #4918, #4926, #4928, #4929, #4931 and #4932.
+- **rxc:** built from the commit that freezes this file (`cargo build --release`), with the runtime in `ref/compile/rt-web.ts` from that commit. Deviation: not published first (see "Freeze").
+- **Exact:** Exact has no tagged release, so this is a pinned checkout, commit 8c742e6a (a deviation, as planned).
+- **Foldkit:** the published 0.170.0, with effect 4.1.0.
+- **React / XState:** react 19.2.0, xstate 5.32.6, @xstate/react 6.1.0, @tanstack/react-query 5.90.2.
 
-**Gate:** before the round starts, all 12 references (6 arms × 2 tasks) are regraded on the frozen builds and must grade 0. If one gains a hole, it is traced. A framework bug is filed upstream and the round waits; a reference bug is fixed in the reference.
+**Gate (as drafted; see "Freeze"):** before the round starts, all 12 references (6 arms × 2 tasks) are regraded on the frozen builds and must grade 0. If one gains a hole, it is traced. A framework bug is filed upstream and the round waits; a reference bug is fixed in the reference.
 
 ## Grading
 
@@ -50,10 +50,20 @@ All six arms have a hand-written reference that grades 0 on both tasks (see "Ref
   - **Same field written twice:** at rest, the field must show the server's last answer (Ryan, 2026-11-14, final). This is why `--r15` drops desk9's A2 allowance.
   - **Late writes:** a write that answers after its page was left need not show on the next visit (Ryan, 2026-11-14: out of scope). On desk9 this is A4, extended to the detail, labels, comments and two-views checks. On board it is B1: settled checks are skipped, as is the duplicate-card check, in a visit where a late write landed.
   - **B2 (board):** after two moves overlap in the air, a column's settled order isn't checked, only which cards it holds.
+  - **B4 (board):** while anything is in the air, a card's count may keep accepted toggles of an item that was toggled more than once in that busy period, because their answers can come back in another order than the clicks. At rest, the server's count. This follows from the same-field ruling above (added 2026-11-16, before any run).
+  - **Repeated keys:** when one request is asked twice (an archive asked on two visits), every asker gets the first answer the server accepted (fuzzer fix, 2026-11-16, before any run).
   - **Distinct texts:** fuzz-added cards and items get unique texts, because two adds of one text are one flight to the harness.
 - **Board fuzz oracles:** these are listed at the top of `harness/fuzz-board.mjs`.
   - Every frame: duplicate card, heading count, card count against progress, every card's count against the server (give or take that card's own writes still in the air), the work-in-progress limit, the detail's column and title.
   - Settled: columns, checklist and archive equal the server's.
+
+## Freeze (2026-11-16)
+
+Ryan started the round on rc.23 and waived two steps, so that the round would not wait on more regrades of builds that don't change. Both waivers are deviations from this file as drafted.
+
+- **Gate:** not rerun on rc.23. rc.23 is `next` f57cc89fe plus a version bump and a size re-record (8c34a505a). On f57cc89fe, both .rx references graded 0: desk9 77/77, 38/38, 0/20; board 44/45 and 23/26 (only the excluded holds), fuzz 0/120 seeds. The other ten references don't use Solid. They graded 0 on the fuzzers before the two fuzz changes above, which only remove false holes.
+- **Outside review:** not done before the runs. The review happens after, on this file as frozen.
+- **rxc:** not published before the runs. The binary is built from the freezing commit.
 
 ## Runs
 
