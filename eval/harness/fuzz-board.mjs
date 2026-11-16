@@ -219,7 +219,7 @@ async function session(browser, url, seed, steps, log) {
     const fail = r() < (WRITES.has(name) ? 0.3 : 0.1);
     const times = Math.max(1, (await page.evaluate(k => globalThis.__flights.asked().filter(x => x === k).length, key)) - (settledCount.get(key) ?? 0));
     settledCount.set(key, (settledCount.get(key) ?? 0) + times);
-    let a; for (let t = 0; t < times; t++) a = answer(srv, key, fail);
+    let a; for (let t = 0; t < times; t++) { const x = answer(srv, key, fail); if (!a || a.fail) a = x; }   // one answer reaches every asker: the first that the server accepted
     if (WRITES.has(name) && !a.fail && writeVisit.get(key) !== ui.visit) lateVisit = true;   // B1
     if (a.fail && (name === "toggleItem" || name === "addItem")) heldDeclined.push(key);    // B3
     writeVisit.delete(key);

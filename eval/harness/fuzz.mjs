@@ -246,7 +246,7 @@ async function session(browser, url, seed, steps, log, r9 = false, r15 = false) 
     // two calls with one key while both are in the air are one flight to the test, but two requests to the server
     const times = Math.max(1, (await page.evaluate(k => globalThis.__flights.asked().filter(x => x === k).length, key)) - (settledCount.get(key) ?? 0));
     settledCount.set(key, (settledCount.get(key) ?? 0) + times);
-    let a; for (let t = 0; t < times; t++) a = answer(srv, key, fail);
+    let a; for (let t = 0; t < times; t++) { const x = answer(srv, key, fail); if (!a || a.fail) a = x; }   // one answer reaches every asker: the first that the server accepted
     if (w && !fail && w.gen !== gen && target) stale.push({ issue: w.issue, field: w.field, before });   // A4: a write from a page since left
     trail.push(`${fail ? "fail" : "land"} ${key}`);
     if (w) { writes.delete(key); if (fail) declined.push(w); else w.accepted = true; }
