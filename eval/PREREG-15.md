@@ -68,6 +68,13 @@ Ryan started the round on rc.23 and waived two steps, so that the round would no
 - **Prompt delivery:** each agent is told to read its desk's `.prompt` (written by `scaffold.mjs`, the round 12 prompt per arm) in full and follow it, instead of getting the text pasted in. That costs one read, the same for every arm.
 - **Concurrency:** the runs go two at a time on one 4-CPU machine, in the order in `runs/r15/.order` (a seed-15 shuffle of the 144 desks). Time per run is taken from each agent's transcript.
 
+### What happened during the runs (recorded after, 2026-11-17)
+
+- **Two container restarts.** The machine restarted twice, at about 22:25Z on 11-16 (after 34 runs) and about 02:40Z on 11-17 (after 88). Each restart killed the runs that were going. Finished runs kept their desks, and each one's final report was saved as `<desk>/.report`.
+- **Four desks run again from scratch.** Four desks were interrupted mid-run: board-rx-haiku-2, board-rx-haiku-4, desk9-contract-opus-2 and board-vanilla-haiku-6. Their partial desks were moved to `runs/r15/.interrupted/` (kept, not graded). Each was scaffolded fresh and run again in the same order. The remaining runs went in the same order as before. All 144 runs finished at about 07:20Z on 11-17.
+- **Five empty final reports.** These agents ended without a final report: board-rx-haiku-1, board-contract-haiku-1, board-rx-haiku-4, board-xstate-haiku-1 and board-contract-haiku-2. Their apps are graded as left on disk, like every other app.
+- **Solid 2.0.0.** Solid 2.0.0 was released during the round, on `main`. Between 8c34a505a and 2.0.0 (main 8a129c9f6), the signals and solid sources changed only in comments and docs links. The one code change is in web: a `hydrate(document)` fix (#4962), and these apps don't hydrate. So the results apply to 2.0.0 too.
+
 ## Runs
 
 - **Count:** for each arm and task, 6 frontier (Opus) and 6 small (Haiku) apps. That is 6 × 2 × 12 = 144 runs, in one interleaved batch.
