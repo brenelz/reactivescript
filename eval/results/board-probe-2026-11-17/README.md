@@ -35,3 +35,65 @@ What the defects are (traced):
 
 All three agents kept guess ledgers. opus-2 guessed moves on the column answers directly (the reference's shape) but
 kept ledgers for renames, toggles and item adds.
+
+## Probe 2: one shape, guesses on the answer (desks r15h, `probe2/`)
+
+The guide was rewritten (commit 93cb0aa) to teach one shape for server data: guesses go on the answer stores, and an
+accepted write re-asks them. The ledger sections were removed. Three Opus desks, same brief and harness.
+
+| desk | hidden | overlap defects | fuzz | defects |
+|---|---|---|---|---|
+| opus-1 | 45/45 | 1 | 6/20 | 7 |
+| opus-2 | 45/45 | 1 | 4/20 | 5 |
+| opus-3 | 45/45 | 1 | 2/20 | 3 |
+
+Mean 5.0. **All three apps used the shape**; none kept a ledger. Traced:
+- "an earlier move declined while a later move of the card is out" (all three, fails its hold probe): an accepted
+  move re-asked only its from/to lists, not the list holding the card now.
+- opus-1 fuzz seeds 2, 9, 18: the guide said to also re-ask "the list that holds the row now (`latest`)". `latest`
+  of a list that hasn't answered yet throws NotReadyError, which `catch (e) => []` doesn't take; the action's own
+  `try` took it as a decline with an empty message and skipped every refresh, so the guess reverted. With the
+  `latest` reads replaced by plain refreshes of all three lists, those seeds pass. Guide fixed in fde2b56: re-ask
+  every list the row can be in.
+- Seed 14 (opus-1, opus-3) and opus-2 seed 17: a toggle made while switching to another card was held. The card shows
+  the toggle and the held checklist doesn't. This is a Solid bug: solidjs/solid#4987 (repro
+  `repro/guess-hidden-in-held-loading-on.spec.tsx`).
+- opus-2 seed 10: the card count loses a toggle after a rename guessed in between. This is a Solid bug:
+  solidjs/solid#4988 (repro `repro/guess-lost-after-other-field.spec.tsx`).
+- opus-2 seed 13 page error: the app mirrors derived state (which card each column has selected) into sources with
+  effects. That is agent code.
+- opus-1 seed 12: the detail of a card in Doing shows "error: declined" when a To do re-ask fails. In the app,
+  reading `sel.card.title` throws To do's error. Minimal trail: select a To do card, accept a reorder in To do (To do
+  re-asked), select a Doing card, fail the re-ask. jsdom and oracle repros don't reproduce it. **Open.**
+- Not yet traced: opus-2 seed 20 (heading count after an archive), opus-3 seed 18 (a rename and item add land on the
+  card below the selected one).
+
+## Probe 3: re-ask every list the row can be in (desks r15i, `probe3/`)
+
+Same as probe 2, with the move rule fixed (fde2b56).
+
+| desk | hidden | overlap defects | fuzz | defects | agent time |
+|---|---|---|---|---|---|
+| opus-1 | 45/45 | 0 | 9/20 | 9 | 6.0 min |
+| opus-2 | 44/45 | 0 | 7/20 | 8 | 5.4 min |
+| opus-3 | 44/45 | 1 | 10/20 | 12 | 6.7 min |
+
+Mean 9.67. All three follow the rule (no `latest`; every accept re-asks all three columns). Every hold probe passes,
+including "an earlier move declined …", which no app fails now. Two new overlap failures in all three apps ("an add
+accepted while To do reloads", "two renames, the later declined") are consistent holds: the re-asks of the other
+columns hold the add and the declined rename until they land (`trace/holds-probe3.mjs`, `probe3/holds/*.extra.txt`).
+They are excluded as shared-list holds, but they are longer holds than before, caused by re-asking every list.
+
+Traced fuzz families:
+- opus-3, 7 of its 10 holes: the detail finds the card's column with `has(todoRows, selected)` and no `catch`, so it
+  shows "loading" until every column has answered. That is agent code.
+- opus-1 seeds 2, 13, 18 and opus-2 seeds 2, 13: the detail tears after a re-ask fails. opus-1 shows the else branch
+  with values from before the selection (`#-1 undefined in`), and opus-2 shows `#4 in`. Minimal trail (opus-1): Doing
+  loads while To do and Done are still on their first fetch; move #4 up, then down; select #4; accept the second move
+  (it re-asks all three); fail To do. This looks like the same family as probe 2 opus-1 seed 12. Re-asking every list
+  makes it more frequent. **Open**: jsdom and oracle repros don't reproduce it yet.
+- Count tears (opus-1 seeds 10, 16; opus-2 seeds 10, 14, 20; opus-3 seed 10) match #4987 and #4988.
+- opus-3 "a move into a column that is still loading": the move is allowed and its index is counted from the unloaded
+  column. That is agent code.
+- Hidden "the new-card input starts empty when the board opens again" (opus-2, opus-3): agent code.
+- Every app mirrors its column counts into sources through an `effect` (`Count`) to drive the Doing limit.
