@@ -101,4 +101,4 @@ Expr      ::= TypeScript's, without assignment, `this`, `function`, `new` on rea
 - `rows key id = …` or `source xs key id = …` keeps rows' identity by `id` (ST-4); `for r in rows` gives each row
   its own region. Write one row with `xs[i].field := v` or a functional write (W-6).
 - `source xs = f(server)` is a client-owned layer over server data: written locally, reset when the server answer
-  changes (ST-5; `async.md`, "three layers").
+  changes (ST-5). A write on server data guesses on the answers the screen reads (`async.md`, "Guesses go on the answer").

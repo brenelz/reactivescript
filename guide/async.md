@@ -100,108 +100,83 @@ by what the screen should do:
 To guess a value a component gets as a prop, guess its own equation of it: `shown = props.title`, then
 `guess shown := t` in the action. A prop itself is read-only (O-4), and the guess shows wherever the child reads `shown`.
 
-### Writing one row of a list
+### Guesses go on the answer
 
-When several actions can each change a different row of one list, guess the row, not the list. (When the write also
-shows somewhere else, or its row may not be on screen when it is made, use "Every view of a write" below instead.)
+There is one shape for a write on server data. The server's answers are the stores the screen reads, and a write
+guesses on them, as the server will make them:
 
-```rx
-export source todos: Todo[] key id = await loadTodos()
-
-export action markDone(id: number) {
-  try {
-    let i = todos.findIndex(t => t.id == id)  // -1 when absent
-    guess todos[i].done := true          // this row only
-    await saveDone(id)
-    refresh todos                             // the server's list confirms the guess
-  } catch (e) { … }
-}
-```
-
-Guessing the row changes only that row on screen, and a new answer for the list corrects only the rows that differ
-(AC-3). After the `await`, re-ask the list (`refresh todos`) rather than writing the row: a plain write to a list that
-is guessed by row is not supported yet.
-
-### When a declined guess waits
-
-A row guess belongs to its action: when the action ends (accepted or declined), the row shows the truth again,
-even while other actions on the same list are still out. The exception is a re-ask. A keyed source with a question
-is one projection of its answer, and a new answer can touch every row, so while an action's `refresh todos` is in
-flight, everything shown from `todos` waits for that action to end, including another action's declined guess.
-The screen is never wrong in between: it shows the guesses, then the truth, in one frame. This is the design (H-11),
-not a bug, and moving the guess to a source of its own doesn't change it: the rows that show it read `todos`.
-
-A guess on a whole list (`guess adding := as => [...as, x]`) is one change with every other guess on that list:
-two adds in flight end together, so a declined one stays until the other ends. That's the same rule, not something
-to work around.
-
-- **Show that something is in flight**, so the longer wait isn't silent: a row flag set by the guess
-  (`guess todos[i].saving := true`), or `pending? todos` with `affects todos`.
-- **Don't rebuild guesses by hand** (a plain list of pending ids with your own revert) to end them one by one: it
-  loses the revert and the hold that keep the screen consistent.
-
-### Guessing data that depends on a selection
-
-A guess on a value whose question reads a selection holds the selection with it: while the action runs, choosing
-something else waits for the server, and the screen stays on the old choice until the action ends (F-1). Keep the
-pending items in a source of their own, with a constant question, and show them beside the loaded ones:
+1. **Guess on every store the write shows in.** An edit is a path guess on its row (`guess issues[i].title := t`), at
+   an index the handler works out from the screen and passes in. An add, a removal or a move is a function guess on
+   each list it changes (`guess open := rs => moved(rs, m)`). A title shown in a list row and in a detail heading is
+   two guesses, one on each answer.
+2. **Accepted: re-ask the answers it changed** (`refresh issues`). Its guesses stay until the new answers land (D-34),
+   so the change never blinks out and never shows twice. On a decline re-ask nothing: the guesses revert with the
+   message, in one frame (AC-7).
+3. **A row that wasn't on screen to guess** (the handler's index was -1: a filtered-out row, a list still loading)
+   gets the server's answer as a guess after the `await`, until the re-ask lands:
+   `if (i < 0) { guess issues := rs => rs.map(x => x.id == r.id ? { ...x, title: r.title } : x) }`.
 
 ```rx
-source photo: number := 1
-tags = await loadTags(photo)
-source adding: { photo: number; tag: string }[] = []
-shownAdding = adding.filter(a => a.photo == photo)   // shown after `tags`
+export source filter := "open"
+issues key id = await fetchIssues(filter)
+detail = selected == null ? null : await fetchIssue(selected)
 
-export action addTag(p: number, tag: string) {
+export action rename(id: number, title: string, i: number) {    // i: the row's index on screen, from the handler
   try {
-    guess adding := [...adding, { photo: p, tag: tag }]
-    await saveTag(p, tag)
-    refresh tags                              // the server's list now has the tag; the guess goes with the action
-  } catch (e) { … }
-}
-```
-
-Changing `photo` while a tag is saving shows the new photo's tags at once, and the pending tag only under its own
-photo.
-
-### Every view of a write: lay it over the answer
-
-A row guess (`guess todos[i].done := true`) changes one slot of one answer. It misses a write whose item is not on
-screen when the click happens (a filtered-out row, a list still loading): `findIndex` gives -1 and nothing shows, even
-when the item arrives from a reload while the write is out. And it shows in only one place: a title shown in a list
-row and in a heading needs a guess on each, and missing one makes the two disagree.
-
-When a write can show in more than one place, or on an item that may not be on screen yet, keep the writes in flight
-in a list of their own and lay them over every answer in an equation. Every view reads that equation:
-
-```rx
-server key id = await loadProjects(group)               // the server's answer, whatever it is now
-source renaming: { id: string; name: string }[] = []   // writes in flight: a guess list, constant question
-
-fn nameOf(rs, id: string, name: string) => rs.reduce((n, r) => r.id == id ? r.name : n, name)
-projects key id = server.map(p => ({ ...p, name: nameOf(renaming, p.id, p.name) }))   // the list reads this
-heading = open == null ? "" : nameOf(renaming, open.id, open.name)                    // so does the header
-
-export action rename(id: string, name: string) {
-  try {
-    guess renaming := rs => [...rs, { id: id, name: name }]
-    await renameProject(id, name)
-    refresh server                     // accepted: the guess stays until the new answer lands (D-34)
-    refresh openProject
+    if (i >= 0) { guess issues[i].title := title }
+    guess detail.title := title
+    let r = await renameIssue(id, title)
+    if (i < 0) { guess issues := rs => rs.map(x => x.id == r.id ? { ...x, title: r.title } : x) }
+    refresh issues
+    refresh detail
   } catch (e) {
-    renameError := e.message           // declined: the guess reverts with the message, in one frame
+    renameError := e.message
   }
 }
 ```
 
-- The write shows on any answer that holds the item: one that arrives from another write's re-ask, a reload, a filter
-  switched back. It shows the same in every view, because every view reads it through one equation.
-- `renaming` has a constant question, so guessing it never holds a selection or a filter switch (H-11).
-- Two writes of one kind are one change on `renaming`; a declined one shows until the other ends (H-11). That's the
-  rule, not a bug.
-- Re-ask only when the write was accepted. A declined write has nothing new on the server, and a re-ask would keep
-  its guess up until the answer lands.
-- A removal is the same: `source removing: string[] = []`, and the list equation filters those ids out.
+- **Don't keep writes in lists of your own laid over the answers.** That shape needs every view to merge every list,
+  and every accept to be written back by hand, and those hand-written writes are where apps go wrong: a row written
+  into the column it was in at the click, a card whose rename is lost, a placeholder shown beside its own row.
+- **A new row** is a placeholder guessed into the list it will join, under a key minted in the handler. With a server
+  id it is inert (no controls, since the server doesn't know it yet) and the re-ask replaces it; a client id the
+  server keeps lets the placeholder be the row.
+- **When the server answers a kind of row in several fetches** (one list per status, per folder, per page), each fetch
+  is its own keyed store, row for row in the server's order, so a row shows once. A move guesses the list it leaves
+  and the list it joins. On accept, re-ask the lists named by the action's arguments, plus the list that holds the
+  row now (`latest`): another write of the same row may have been answered first.
+- **Work out positions in the handler and pass them in**: an index, a count, a place in the target, computed from
+  the screen (a snapshot, R-8). An action that reads a value another action guessed and then guesses is one change
+  with that action (H-11, D-33).
+- **After the `await`, take only what is the server's.** A plain write into an answer after the server answered
+  takes its answer and the answer's own value at the write (`x := rs => …`, rows found by id), never a row the handler
+  saw or one read from another source: by then it may have changed, or be held with this write. Pass actions plain
+  values (ids, titles, indexes), not rows. The compiler flags the rest (`STALE_CAPTURE`, AC-1g). A plain write to a
+  store that is also guessed by path is not supported yet: re-ask it instead.
+- **A failure is the client's, not a guess.** A guess reverts when its action ends; a failure must outlast it, so it
+  is a plain source, and a successful retry removes it.
+- **Generate ids on the client** in the handler, before calling the action, so a declined add can be shown again
+  with its retry.
+- **Show that something is in flight**, so a long wait isn't silent: a row flag set by the guess
+  (`guess issues[i].saving := true`), or `pending? issues` with `affects issues`.
+
+### When a guess holds
+
+A guess belongs to its action, and the screen it guessed on waits for that action to end. This is the design
+(H-11): the screen is never wrong in between. It shows the guesses, then the truth, in one frame.
+
+- **Two writes on one slot or one list end together.** Two moves that change one list, or two adds to it, share it:
+  a declined one stays until the other ends. Writes on different rows' paths stay apart.
+- **A new question for a guessed answer waits for the write.** Switching a filter, a selection, or reopening the page
+  re-asks the answer, and the switch holds with the write's action: the screen stays on the old answer until the
+  action ends. Keep the switch and the write in different clicks; don't move the guess off the answer to dodge it.
+- **A guess on a value loading a new question** composes on the previous answer, and the new answer replaces it
+  (D-34), so the change doesn't show until the re-ask lands. Keep the control out until the value is shown (under
+  its `loading` boundary, or `disabled={pending? x}`); the compiler flags a control that can guess while its value
+  loads (`GUESS_WHILE_LOADING`). `disabled={pending? x}` inside a held `loading on(sel)` region stays `false` on
+  Solid today (05 DV-22): test `pending? x` in the handler as well, where it reads `true` (R-12).
+- **Don't rebuild guesses by hand** (a plain list of pending ids with your own revert) to end them one by one: it
+  loses the revert and the hold that keep the screen consistent.
 
 ### Data belongs with its lifetime
 
@@ -214,114 +189,18 @@ is. There are three:
   as long, and so does whatever it re-asks.
 - **The screen.** What copies what is shown lives where it is shown, inside the region that shows it.
 
-When one value would need two lifetimes, split it into two values. Each case below follows from that:
+When one value would need two lifetimes, split it into two values:
 
-- **A list a write refreshes** is needed by the visit and by the write, so it outlives both: declare it, the writes
-  and their actions in a module (top-level `source`s and `action`s), and let the page read it. The visit becomes a
+- **A list a write re-asks** is needed by the visit and by the write, so it outlives both: declare it, the writes and
+  their actions in a module (top-level `source`s and `action`s), and let the page read it. The visit becomes a
   counter its question reads, moved by opening the page (`source visit := -1`,
   `items = visit >= 0 ? await loadItems(filter) : []`). A module's question is asked when the app starts, so the
   counter starts below the guard and the first open asks; start it at `0` only for the page the app opens on.
-- **A write whose answer is the new value** (a save that returns the saved settings) re-asks nothing, so its data
-  needs only the visit and stays in the page.
-- **A guess** never goes on the module's question: that would give the question the write's lifetime, and the next
-  visit's load, with the page switch that asks it, would wait for the write. Guesses go in lists of their own, laid
-  over the answer (the next section).
+- **A write whose answer is the new value** (a save that returns the saved settings) writes that answer and re-asks
+  nothing, so its data needs only the visit and stays in the page.
 - **A count in a tab** copies the rows on screen, so it is an `effect` in a component inside the list's region
   (`<OpenCount n={rows.length} … />` under the list's `loading`), not beside the module: outside the region it waits
   for every re-ask of the list and misses the guesses the rows already show.
-
-### Data the server owns: three layers
-
-Every screen over server data is the same stack. Each layer is derived from the one below and has its own lifetime,
-and the screen reads only the top:
-
-1. **The server's truth.** A question: `server = await loadTodos()`. It changes only when it is asked again, so end
-   every write with `refresh server`.
-2. **What the client owns over it.** A source whose question is the layer below: `source todos = shape(server, …)`
-   (ST-5a). The client writes it (an edit, a draft, a flag, a failure to show), and a new answer from below resets
-   it. Anything that must outlive that reset (in the todos app, the failures awaiting a retry) is a plain source
-   this layer is derived from.
-3. **Guesses.** `guess` writes on layer 2, made by an action and gone when the action ends.
-
-`examples/todos.rx` is the whole app:
-
-```rx
-server = await loadTodos()                                  // 1. what the server has: re-asked after every write
-source failures: Failure[] := []                            // outlives a reset: kept until a retry is accepted
-source todos: Row[] key id = withFailures(server, failures) // 2. the client's layer; 3. row guesses go on it
-source adding: Row[] key id = []                            // 3. adds in flight (a new row has no index to guess)
-
-export action add(id: string, title: string) {
-  try {
-    guess adding := as => [...as, { id: id, title: title, saving: true }]
-    await addTodo(id, title)
-    failures := fs => without(fs, id)
-  } catch (e) {
-    failures := fs => [...without(fs, id), { id: id, kind: "add", title: title }]
-  }
-  refresh server                                            // the accepted row comes from here
-}
-```
-
-- **Never keep your own copy of what the server accepted.** Don't append the answer of a write to a list
-  (`posted := [...posted, await addComment(…)]`): when a read and a write cross, the read's answer already has the
-  new item and your copy adds it again. End the action with `refresh` on the server's list instead. The action's
-  guesses stay up until that answer lands (D-34), so the row never blinks out and never shows twice.
-- **After the `await`, write only what is the server's.** A write into an answer after the server answered takes what
-  it answered and what the answer holds at the write, found by id (`cards := rs => …`), never a row, count or place
-  the handler saw or the action read from another source, before the `await` or after it: by then the row may have
-  changed (a rename accepted, or held with this write), or be elsewhere (an earlier move declined), and the old one goes
-  back on screen. Pass actions plain values (ids, titles, indexes), not rows. When the answer doesn't say where a row is
-  now (a move answers only where it went), `refresh` the answers it left and joined. The compiler flags the rest
-  (`STALE_CAPTURE`, AC-1g).
-- **A guess and the answer that ends it share a place.** Guess a new row into the store its answer is written to, under
-  a key of its own, so the answer replaces it. A guess in a list of its own ends with a `refresh`, which the action
-  waits for (D-34). Written straight into the answer beside a guess in its own list, the row shows twice whenever
-  another write keeps the guess up.
-- **A failure is the client's, not a guess.** A guess reverts when its action ends; a failure must outlast it, so it
-  lives in the client's layer, and a successful retry removes it.
-- **Generate ids on the client** in the handler, before calling the action, so a declined add can be shown again
-  with its retry.
-- **Guess only on a value that is shown.** A guess on a value that is loading a new question composes on the previous
-  answer, and the new answer replaces it (D-34); a guess on an item that isn't in the list on screen (`findIndex`
-  gave -1) guesses nothing. Either way the screen doesn't show the change until the action's `refresh` lands, and it
-  looks lost. A write against a value that isn't shown yet needs a place to show: keep the control out until the
-  value is shown (under its `loading` boundary, or disabled while it is pending), or keep the write in a
-  client-owned layer of its own ("three layers" above) and guess there. The compiler flags a control that can guess
-  while its value loads (`GUESS_WHILE_LOADING`). One case it can't see: a selection changed while a guess on the
-  value is out joins the guess's hold (H-11), so the `loading on(sel)` region keeps its rows, and
-  `disabled={pending? x}` inside it stays `false` on Solid today (05 DV-22). Test `pending? x` in the handler as
-  well; there it reads `true` (R-12).
-
-### One store over the server
-
-When the server answers a kind of row in several fetches (one list per status, per folder, per page), keep one keyed store
-per fetch, each the answer it stands for, row for row, and show each from its own store:
-
-- **A store per fetch, keyed.** `open key id = rowsOf(openAns catch (e) => null)`: the order on screen is the server's
-  order, and a row lives in exactly one store, so it shows once.
-- **An edit is one path guess on one row** (`guess open[i].title := t`, "Writing one row of a list" above), in the
-  store that shows the row. Not a guess on the whole list.
-- **A write that moves rows guesses each list it changes, as the server will make it.** A row moving between lists
-  leaves one and goes into another at an index: `guess open := rs => moved(rs, "open", m)` for each store. Two
-  such writes that change the same list share its slots (one write per differing index, #4724), so they end together:
-  a declined move stays up until the other one ends. Writes on lists they don't share stay apart.
-- When one write shows in several fetches (a title in a list and in a detail fetched on its own), or on a row that
-  may not be on screen yet, lay it over the answers instead ("Every view of a write" below).
-- **Work out positions in the handler and pass them in.** An index, a count, a place in the target: compute them in
-  the handler from the screen (a snapshot, R-8) and pass them as arguments. An action that reads a value another
-  action guessed and then guesses is one change with that action (H-11, Solid's D-33; solidjs/solid#4788): the two
-  end together, so a declined write stays up until the other one ends.
-- **On accept, re-ask the answers that held the row and the one it joined.** Name them from the answers and the
-  action's arguments, not from the store, whose row already shows the guess, and add the answer that holds the row
-  now (`latest`): another write of the same row may have been answered first. On a decline re-ask nothing: the guess
-  reverts by itself.
-- **A create whose answer is the new row** writes that row into its answer source after the `await` (a source with a
-  question takes a write until its next answer, ST-5a, so the row is never there twice). Until then guess a placeholder
-  into the same store under a key minted on the client, so it sits where the row will. With a server id it is inert
-  (no controls, since the server doesn't know it yet) and is replaced by the real row; a client-minted id the server
-  keeps lets the placeholder be the row.
-- **Errors stay plain sources.** A guess reverts with its action; an error must outlive it.
 
 ## 4. Things that look like bugs and aren't
 
@@ -329,7 +208,7 @@ per fetch, each the answer it stands for, row for row, and show each from its ow
   `onFlush` (the table above). Don't move the code into a plain handler to escape it.
 - **A declined row guess stays until another action's re-ask lands.** While an action's `refresh` of the list is
   in flight, the list's rows wait for that action (H-11), declined guesses included. That's by design; see "When
-  a declined guess waits" above.
+  a guess holds" above.
 - **A click waits for an action it has nothing to do with.** A plain write to a source an action in flight has
   written or guessed joins that action's hold (H-2): a click that clears the action's error waits for the
   server. Keep such a write off the action's sources, or make it an `onFlush` run.
