@@ -2,7 +2,7 @@
 
 This round was preregistered in [`../../PREREG-15.md`](../../PREREG-15.md), which was frozen before any run and lists every deviation. It ran 144 apps: 6 arms × (6 Opus 5.5 + 6 Haiku 5.5) × 2 tasks (desk9, and the held-out task, board). Solid was 2.0.0-rc.23; 2.0.0 has the same signals code.
 
-**Status: PROVISIONAL.** One question is still open with Ryan: whether the seven "a write lands after the page was left, judged on the next visit" tests count. His caching ruling put that case out of scope, but only the fuzzer was changed to match. The tables below exclude that family in every arm, and [`score-count-left.txt`](score-count-left.txt) counts it. The outside review is also still to come.
+**Status:** scored. Ryan ruled on 2026-11-17 that the seven "a write lands after the page was left, judged on the next visit" tests are out of scope (his caching ruling), and they are excluded in every arm. [`score-count-left.txt`](score-count-left.txt) shows the totals with them counted. The outside review is still to come.
 
 ## Result
 
