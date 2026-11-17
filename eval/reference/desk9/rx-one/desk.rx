@@ -3,8 +3,9 @@
 // after the page was left and opened again.
 //
 // One shape (guide/async.md): `issues` and `detail` are the server's answers, and every write guesses on the answers
-// it shows in, as the server will make them. An accepted write re-asks them; its guesses stay until those answers
-// land (D-34). A declined one reverts with its message, in one frame (AC-7).
+// it shows in, as the server will make them. Accepted, it re-asks them, and guesses what the server answered on a row
+// that wasn't on screen to guess before; its guesses stay until the new answers land (D-34). Declined, they revert
+// with its message, in one frame (AC-7).
 
 import pure { fetchIssues, fetchIssue } from "./api"
 import { assign, renameIssue, closeIssue } from "./api"
@@ -92,14 +93,14 @@ export action renameTo(id: number, title: string, at: number) {
   }
 }
 
-export action closeOne(id: number, fromRow: boolean) {
+export action closeOne(id: number, fromRow: boolean, open: boolean) {
   if (fromRow) {
     onFlush(() => { rowError := "" })
   } else {
     onFlush(() => { closeError := "" })
   }
   try {
-    guess issues := rs => filter == "open" ? rs.filter(r => r.id != id) : rs
+    if (open) { guess issues := rs => rs.filter(r => r.id != id) }
     await closeIssue(id)
     refresh issues
   } catch (e) {
@@ -109,4 +110,8 @@ export action closeOne(id: number, fromRow: boolean) {
       closeError := e.message
     }
   }
+}
+
+export action refreshDetail() {
+  refresh detail
 }

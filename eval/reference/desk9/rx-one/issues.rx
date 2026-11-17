@@ -1,7 +1,7 @@
 // The issues page: the filtered list, the selected issue's detail, and the controls for the writes in desk.rx.
 
 import { filter, selected, rows, detail, heading, indexOf, assignError, renameError, closeError, rowError } from "./desk.rx"
-import { showFilter, select, assignTo, renameTo, closeOne } from "./desk.rx"
+import { showFilter, select, assignTo, renameTo, closeOne, refreshDetail } from "./desk.rx"
 import { Comments } from "./comments.rx"
 import { Labels } from "./labels.rx"
 import { Related } from "./related.rx"
@@ -47,7 +47,7 @@ export component IssuesPage(props: { onOpenCount: (n: number) => void; onOpenHel
                 }}>#{it.id} {it.title} ({it.assignee ?? "unassigned"})</span>{" "}
                 <button data-testid="row-assign" onClick={() => { assignTo(it.id, user, true, indexOf(rows, it.id)) }}>assign to {user}</button>
                 {if filter == "open" {
-                  {" "}<button data-testid="row-close" onClick={() => { closeOne(it.id, true) }}>close</button>
+                  {" "}<button data-testid="row-close" onClick={() => { closeOne(it.id, true, filter == "open") }}>close</button>
                 }}
               </li>
             }}
@@ -63,7 +63,7 @@ export component IssuesPage(props: { onOpenCount: (n: number) => void; onOpenHel
             <p>{detail.body}</p>
             <Related title={heading} onOpen={(q, id) => { props.onOpenHelp(q, id) }} />
           }}
-          <button data-testid="retry" onClick={() => { refresh detail }}>retry</button>
+          <button data-testid="retry" onClick={() => { refreshDetail() }}>retry</button>
         }}
         <button data-testid="assign" onClick={() => { assignTo(selected, user, false, indexOf(rows, selected) catch (e) => -1) }}>assign to {user}</button>
         {if assignError != "" {
@@ -74,7 +74,7 @@ export component IssuesPage(props: { onOpenCount: (n: number) => void; onOpenHel
         {if renameError != "" {
           <p>rename error: {renameError}</p>
         }}
-        <button data-testid="close" onClick={() => { closeOne(selected, false) }}>close</button>
+        <button data-testid="close" onClick={() => { closeOne(selected, false, filter == "open") }}>close</button>
         {if closeError != "" {
           <p>close error: {closeError}</p>
         }}
