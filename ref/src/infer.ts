@@ -1,7 +1,7 @@
 // 06 AC-1b…AC-1e: what the compiler reads off an imperative body. Which arrows are actions without the keyword (AC-1b), and
 // the checks every imperative run gets: a plain write an action holds across an `await` (HELD_WRITE, AC-1c), a read of a
 // source the same change already wrote (STALE_OWN_READ, AC-1d), and a write after an `await` computed from the same source
-// as read before it (STALE_WRITE_BACK, AC-1e), and a write into an answer after an `await` of a row fixed before it (STALE_CAPTURE, AC-1g). Solid sees none of them: a TypeScript body's promises and reads are not
+// as read before it (STALE_WRITE_BACK, AC-1e), and a write into an answer after an `await` of anything but the server's (STALE_CAPTURE, AC-1g). Solid sees none of them: a TypeScript body's promises and reads are not
 // visible to it, which is why it asks for `action(function* …)` and lets a stale read or a lost update through.
 import type { Expr, Stmt } from "./ast.ts";
 import { freeNames } from "./check.ts";
@@ -47,7 +47,7 @@ export const triggerText = (t: Trigger): string => t === "write+await" ? "it wri
 export type Finding = { code: "HELD_WRITE" | "STALE_OWN_READ" | "STALE_WRITE_BACK" | "STALE_CAPTURE"; name: string; via?: string };
 /** A parameter type that names a plain value (an id, a title, a position), not a row: `number`, `string`, `boolean`, literals, `null`. */
 export const scalarType = (t?: string): boolean => !!t && t.split("|").every(m => /^\s*(number|string|boolean|null|undefined|"[^"]*"|'[^']*'|-?\d+(\.\d+)?)\s*$/.test(m));
-export type RunOpts = { ptypes?: (string | undefined)[]; answered?: (name: string) => boolean };
+export type RunOpts = { ptypes?: (string | undefined)[]; answered?: (name: string) => boolean; stateful?: (name: string) => boolean };
 type Path = string[];                                                   // keys from the source; "*" a computed key
 type Dep = { k: string; path: Path; epoch: number };                    // AC-1e: a source read, and the awaits passed when it was read
 // taint: the source reads each local's value was computed from; epoch: the awaits passed on this path (the most, after a merge)
@@ -70,8 +70,8 @@ const overlaps = (a: Path, b: Path): boolean => { for (let i = 0; i < Math.min(a
  *  run's parameters. In source order, per path: a plain write that reaches an `await` in an inferred action is HELD_WRITE;
  *  a read of a source this change wrote, at an overlapping key, is STALE_OWN_READ; a plain write after an `await` whose value comes from a read of the same source (at an overlapping key) taken before that `await`, directly or through a local, is STALE_WRITE_BACK.
  *  In a declared action (`opts`), a write after an `await` into a source with a question (an answer) whose value — closures
- *  included — names a local fixed before that `await` from a source read, or a parameter typed as a row (not a plain value),
- *  is STALE_CAPTURE (AC-1g). A guess is not a held write (it shows now, H-11) but is a write a read does not see (H-10). A
+ *  included — names a source or equation, a local read from one, or a parameter typed as a row (not a plain value), is
+ *  STALE_CAPTURE (AC-1g): it takes only the `await`'s value, plain arguments, and its own value at the write. A guess is not a held write (it shows now, H-11) but is a write a read does not see (H-10). A
  *  functional write (`x := v => …`, W-6) reads nothing now; a closure's body runs later, unless it is a local closure called
  *  here; `pending?` and `latest` are probes, not snapshots. Each finding once per name. */
 export function runFindings(stmts: Stmt[], action: boolean, bound: string[] = [], inferred = false, opts: RunOpts = {}): Finding[] {
@@ -144,7 +144,11 @@ export function runFindings(stmts: Stmt[], action: boolean, bound: string[] = []
           const back = s.k === "write" && s.e.k !== "fn" && deps(s.e).some(d => d.k === k && d.epoch < st.epoch && overlaps(d.path, wpath));
           if (back) report("STALE_WRITE_BACK", k);
           else if (s.k === "write" && st.epoch > 0 && !s.target.ctx && opts.answered?.(s.target.name)) {
-            const c = caps(s.e).find(c => c.d.epoch < st.epoch); if (c) report("STALE_CAPTURE", k, c.via);
+            // the answer takes the server's answer, plain arguments and its own value at the write (the closure's argument):
+            // a row parameter, a local read from any source (before the `await` or after it), or another source read here is not the server's
+            const c = caps(s.e)[0]?.via; const ns = new Set<string>(); freeNames(s.e, new Set(), ns);
+            const o = c ?? [...ns].find(n => !sh.has(n) && !!opts.stateful?.(n));
+            if (o) report("STALE_CAPTURE", k, o);
           }
           st.written.set(k, [...(st.written.get(k) ?? []), wpath]);
           if (s.k === "write" && inferred) st.held.add(k);

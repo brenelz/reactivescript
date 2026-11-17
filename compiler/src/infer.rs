@@ -167,6 +167,8 @@ pub fn scalar_type(t: &str) -> bool {
 pub struct RunOpts<'o> {
     pub ptypes: Vec<Option<String>>,
     pub answered: Option<&'o dyn Fn(&str) -> bool>,
+    /// names of sources and equations in scope
+    pub stateful: Option<&'o dyn Fn(&str) -> bool>,
 }
 
 /// keys from the source; "*" a computed key
@@ -229,6 +231,7 @@ struct Walker<'o> {
     action: bool,
     inferred: bool,
     answered: Option<&'o dyn Fn(&str) -> bool>,
+    stateful: Option<&'o dyn Fn(&str) -> bool>,
 }
 impl<'o> Walker<'o> {
     fn report(&mut self, code: Code, name: String) {
@@ -481,12 +484,14 @@ impl<'o> Walker<'o> {
                             back = true;
                         }
                     }
-                    // AC-1g: the locals and parameters the value names, closures included (a functional write's closure runs
-                    // at the write, but a local it names was fixed before it), with each one's taint
+                    // AC-1g: the answer takes the server's answer, plain arguments and its own value at the write (the closure's
+                    // argument): a row parameter, a local read from any source (before the `await` or after it), or a source
+                    // read here, closures included, is not the server's
                     if !back && matches!(s.k, StmtKind::Write { .. }) && st.epoch > 0 && !target.is_ctx() && self.answered.map_or(false, |a| a(&target.name)) {
                         let mut ns = IndexSet::new();
                         crate::check::free_names(e, &HashSet::new(), &mut ns);
-                        let hit = ns.iter().filter(|n| sh.contains(*n)).find(|n| st.taint.get(*n).map_or(false, |t| t.iter().any(|(_, _, ep)| *ep < st.epoch)));
+                        let local = ns.iter().find(|n| sh.contains(*n) && st.taint.get(*n).map_or(false, |t| !t.is_empty()));
+                        let hit = local.or_else(|| ns.iter().find(|n| !sh.contains(*n) && self.stateful.map_or(false, |f| f(n))));
                         if let Some(n) = hit {
                             self.report_via(Code::StaleCapture, k.clone(), Some(n.clone()));
                         }
@@ -546,7 +551,7 @@ impl<'o> Walker<'o> {
 /// its awaits (AC-1); a plain run's change ends at each `await`. `inferred`: an action by AC-1b, the only kind HELD_WRITE
 /// applies to. `bound`: the run's parameters. Each finding once per name, in source order.
 pub fn run_findings(stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, opts: &RunOpts) -> Vec<Finding> {
-    let mut w = Walker { out: vec![], said: HashSet::new(), action, inferred, answered: opts.answered };
+    let mut w = Walker { out: vec![], said: HashSet::new(), action, inferred, answered: opts.answered, stateful: opts.stateful };
     let sh: IndexSet<String> = bound.iter().cloned().collect();
     let mut taint: IndexMap<String, Vec<Dep>> = IndexMap::new();
     for (i, p) in bound.iter().enumerate() {

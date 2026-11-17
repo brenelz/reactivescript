@@ -2397,13 +2397,14 @@ impl<'a> Checker<'a> {
     /// `answers_in`: a declared action's scope, where AC-1g asks which names are sources with a question.
     fn run_checks_with(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, ptypes: Vec<Option<String>>, answers_in: Option<EId>) {
         let answered = |n: &str| answers_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Source && self.syms[t].question);
-        let found = run_findings(stmts, action, bound, inferred, &RunOpts { ptypes, answered: if answers_in.is_some() { Some(&answered) } else { None } });
+        let stateful = |n: &str| answers_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Source || self.syms[t].kind == SymKind::Eq);
+        let found = run_findings(stmts, action, bound, inferred, &RunOpts { ptypes, answered: if answers_in.is_some() { Some(&answered) } else { None }, stateful: if answers_in.is_some() { Some(&stateful) } else { None } });
         for f in found {
             let n = &f.name;
             match f.code {
                 Code::StaleCapture => {
                     let v = f.via.clone().unwrap_or_default();
-                    self.err("STALE_CAPTURE", "AC-1g", format!("{n} := … after an `await` writes {v}, which holds what the screen showed before that `await` (a row passed in, or a read of a source): {n} is the server's answer, and by the time the server answers, that row may have changed (a rename accepted, a reload, an earlier write declined) — write only what the server answered and what {n} holds at the write, found by id (`{n} := rs => …`), or re-ask it (`refresh`)"))
+                    self.err("STALE_CAPTURE", "AC-1g", format!("{n} := … after an `await` writes {v}, which is not the server's: {n} is the server's answer, and after the `await` it takes only what the server answered, plain arguments (an id, a title, an index) and its own value at the write (`{n} := rs => …`, finding rows there by id). A row passed in, or read from a source before the `await` or after it, is what the screen showed, and may be stale by now (a rename accepted, a reload, an earlier write declined, a write another action holds) — when the answer alone doesn't say where a row is now, re-ask the answers it left and joined (`refresh`)"))
                 }
                 Code::HeldWrite => self.err("HELD_WRITE", "AC-1c", format!("{n} := … comes before an `await` in a body that is an action because it writes and awaits (AC-1b), so it is held until the body ends (AC-1): for state that shows while the work runs, `guess {n} := …` (a source with a question, ST-5c); for a reset that lands now, `onFlush(() => {{ {n} := … }})` (EF-8); to hold it on purpose, declare the action (`action name() {{ … }}`); or write it after the `await`")),
                 Code::StaleOwnRead => self.err("STALE_OWN_READ", "AC-1d", format!("{n} is read after this change wrote it: the read sees the committed value, not the write (W-4) — keep the value you wrote in a local (`let v = …; {n} := v`) and read that, or write functionally (`{n} := v => …`, W-6)")),

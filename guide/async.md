@@ -269,9 +269,11 @@ export action add(id: string, title: string) {
   guesses stay up until that answer lands (D-34), so the row never blinks out and never shows twice.
 - **After the `await`, write only what is the server's.** A write into an answer after the server answered takes what
   it answered and what the answer holds at the write, found by id (`cards := rs => …`), never a row, count or place
-  the handler saw: by then the row may have changed (a rename accepted) or be elsewhere (an earlier move declined), and
-  the old one goes back on screen. Pass actions plain values (ids, titles, indexes), not rows; when the answer can't
-  be worked out from those, `refresh` it. The compiler flags a row taken before the `await` (`STALE_CAPTURE`, AC-1g).
+  the handler saw or the action read from another source, before the `await` or after it: by then the row may have
+  changed (a rename accepted, or held with this write), or be elsewhere (an earlier move declined), and the old one goes
+  back on screen. Pass actions plain values (ids, titles, indexes), not rows. When the answer doesn't say where a row is
+  now (a move answers only where it went), `refresh` the answers it left and joined. The compiler flags the rest
+  (`STALE_CAPTURE`, AC-1g).
 - **A guess and the answer that ends it share a place.** Guess a new row into the store its answer is written to, under
   a key of its own, so the answer replaces it. A guess in a list of its own ends with a `refresh`, which the action
   waits for (D-34). Written straight into the answer beside a guess in its own list, the row shows twice whenever

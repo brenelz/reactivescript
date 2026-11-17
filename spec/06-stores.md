@@ -237,30 +237,37 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   `check-accepts-arity-and-missing-props.rx`; S-check-1).
 - **AC-1g (An answer takes only what is the server's).** [taken by default
   2026-11-17] In a declared action, a write after an `await` into a source
-  with a question (the server's answer, ST-5a), whose value names, directly
-  or inside its closure, a local fixed before that `await` from a read of
-  any source, or a parameter typed as a row (a type that is not `number`,
-  `string`, `boolean`, a literal, `null`, or a local alias of those), is a
-  compile error (`STALE_CAPTURE`). Such a value is what the screen showed
-  at the click, guesses included. By the time the server answers, the row
-  may have changed (a rename accepted, a reload) or be somewhere else (an
-  earlier move declined), and the write puts the old row, count or place
-  into the answer, so the screen shows a lost edit or a row twice. AC-1e's
-  fix, the functional write, does not help: its closure runs at the write,
-  but the local it names was fixed before. The fix is to write what the
-  server answered (the `await`'s value) and what the answer holds at the
-  write, found by id (`x := rs => …`), or to re-ask (`refresh x`). Plain
-  parameters (an id, a title, an index the handler worked out) are what the
-  user asked for, not a snapshot of state, and are not checked; nor is an
-  untyped parameter, a guess, a write before the first `await`, or a write
-  to a source without a question (a failure record keeps what the user
-  tried). Principle: a write must not read stale state. Found by the AI
-  eval's round 15 (eval/results/round15-2026-11-16): the moves of 4 of 6
-  frontier board apps wrote the card they were given, or the column it was
-  in at the click. On the round's 24 .rx apps, the 19 .rx references, the
-  examples and 161 .rx apps of earlier rounds it fires only on 9 of the 12
-  round 15 board apps, each time on the traced defect (S-infer-7). A write
-  that AC-1e reports is not reported again.
+  with a question (the server's answer, ST-5a) takes only the `await`'s
+  value, plain arguments, and its own value at the write (a functional
+  write's argument, W-6). A value that names, directly or inside its
+  closure, a source or equation, a local read from one (before the `await`
+  or after it), or a parameter typed as a row (a type that is not
+  `number`, `string`, `boolean`, a literal, `null`, or a local alias of
+  those) is a compile error (`STALE_CAPTURE`). Such a value is what the
+  screen showed, not what the server answered: by the time the server
+  answers, the row may have changed (a rename accepted), be somewhere else
+  (an earlier move declined), or carry a write another action holds with
+  this one (a shared list, H-11), which a read does not see (H-10). The
+  write puts the old row, count or place into the answer, so the screen
+  shows a lost edit or a row twice. AC-1e's fix, the functional write, does
+  not help when its closure names such a value. The fix is to find rows in
+  the answer itself by id (`x := rs => …`), or, when the server's answer
+  doesn't say where a row is now (a move answers only where it went), to
+  re-ask the answers it left and joined (`refresh x`). Plain parameters
+  (an id, a title, an index the handler worked out) are what the user
+  asked for and are not checked; nor is an untyped parameter, a guess, a
+  write before the first `await`, or a write to a source without a
+  question (a failure record keeps what the user tried). A write that AC-1e
+  reports is not reported again. Principle: a write must not read stale
+  state. Found by the AI eval's round 15 (eval/results/round15-2026-11-16):
+  the moves of 4 of 6 frontier board apps wrote the card they were given or
+  the column it was in at the click, and in a probe on the first draft of
+  this rule (pre-`await` reads only) 2 of 3 apps moved the read after the
+  `await` and lost a rename held with the move. On round 15's 24 .rx apps,
+  the 19 .rx references, the examples and 161 .rx apps of earlier rounds it
+  fires on 9 of the 12 round 15 board apps, each time on the traced defect,
+  and on 3 October apps that write `x := x.map(…)` after an `await`
+  (S-infer-7).
 - **AC-2 (Not special).** An action is only a way to tie writes to async
   work; the hold is the thing (H-2). `refresh`, `affects` and probes behave
   the same inside and outside one.
@@ -377,7 +384,7 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
 | `HELD_WRITE` (new)              | S   | AC-1c: an early write in an inferred action      |
 | `STALE_OWN_READ` (new)          | S   | AC-1d: a read of the change's own write          |
 | `STALE_WRITE_BACK` (new)        | S   | AC-1e: a pre-`await` read written back after it  |
-| `STALE_CAPTURE` (new)           | S   | AC-1g: a row fixed before an `await` written into an answer after it |
+| `STALE_CAPTURE` (new)           | S   | AC-1g: after an `await`, an answer written with anything but the server's |
 | `GUESS_NO_QUESTION` (new)  | S   | AC-3 / ST-5c                                     |
 | `GUESS_ON_DEFERRED` (new)  | S   | AC-3 / ST-5c: a deferred equation lags its truth |
 | `GUESS_WHILE_LOADING` (new) | S | AC-3a: a guess a click can make while its value loads a new question (D-34) |

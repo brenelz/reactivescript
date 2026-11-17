@@ -242,11 +242,12 @@ export default component App() {
 
 ### STALE_CAPTURE
 
-After an `await`, a write into a source with a question (the server's answer) that puts in a row the action was given,
-or something it read before the `await`, puts back what the screen showed at the click. By the time the server answers,
-that row may have changed (a rename accepted meanwhile) or be somewhere else (an earlier move declined), so the screen
-loses the edit or shows the row twice. Write what the server answered and what the answer holds at the write, found by
-id, or re-ask it with `refresh`. Pass plain values (an id, a title, an index) to the action, not rows.
+After an `await`, a write into a source with a question (the server's answer) takes only what the server answered,
+plain arguments (an id, a title, an index) and the answer's own value at the write (`x := rs => …`, finding rows there
+by id). A row the action was given, or read from a source before the `await` or after it, is what the screen showed:
+by then it may have changed (a rename accepted), be somewhere else (an earlier move declined) or carry a write another
+action still holds, so the screen loses the edit or shows the row twice. When the answer doesn't say where a row is now
+(a move answers only where it went), re-ask the answers it left and joined with `refresh`.
 
 ```rx before
 type Card = { id: number; title: string }

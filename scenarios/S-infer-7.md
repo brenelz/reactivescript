@@ -1,4 +1,4 @@
-# S-infer-7 — after the server answers, an answer takes only what is the server's
+# S-infer-7 — after the `await`, an answer takes only what is the server's
 
 Rules: AC-1g, AC-1e, W-6, ST-5a.
 
@@ -72,3 +72,24 @@ Through a local, too: `first` is read from `rows` before the `await`. A
 position or a count worked out from the screen before the `await` is the same
 (round 15: a move wrote its card back into the column it was in at the click,
 after an earlier move of it had been declined, so the card showed twice).
+
+```rx
+-- reject: STALE_CAPTURE
+export default component App() {
+  source todo = await fetch("todo") -> "" catch (e) => ""
+  source done = await fetch("done") -> "" catch (e) => ""
+  action finish(id: number) {
+    let r = await fetch("move") catch (e) => ""
+    let row = todo
+    done := v => v + row
+  }
+  <button onClick={() => { finish(1) }}>{todo} {done}</button>
+}
+```
+
+Read after the `await`, too: `row` is `todo` as it is committed now, which
+is not the server's answer to this write. Another action's accepted write to
+`todo` may be held with this one (a shared list, H-11), so the read misses it
+and the copy puts the old row into `done` (round 15's probe: a rename accepted
+while two moves of the card were out was lost when the moves landed). A
+move's answer says only where the card went: re-ask both lists.
