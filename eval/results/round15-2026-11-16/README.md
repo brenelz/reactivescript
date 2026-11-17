@@ -60,7 +60,7 @@ Every .rx test failure was traced (see `trace/`).
   - [solidjs/solid#4969](https://github.com/solidjs/solid/issues/4969): `reasks()` overflows the stack when two keyed projections each wait on the other, because each holds a row read from the other (board-rx-opus-4, fuzz seed 20).
   - [#4970](https://github.com/solidjs/solid/issues/4970): a memo under a keyed projection stays stale after an accepted add, when a reorder had written that projection's own row back (board-rx-opus-6, "an add accepted while To do reloads").
   - [#4971](https://github.com/solidjs/solid/issues/4971): a memo over a keyed projection's `length` counts a placeholder twice after its answer replaces it (board-rx-opus-1 and -4, "an item added while the checklist reloads"; the repro is 25 lines).
-  - Still being reduced: a heap error ("Invalid array length", board-rx-opus-4, fuzz seed 6).
+  - [#4972](https://github.com/solidjs/solid/issues/4972): `RangeError: Invalid array length` in the scheduler heap after a reorder wrote a projection's own row back, a rename was out and the list was asked again (board-rx-opus-4, fuzz seed 6).
 
   Fixing all of these would remove only a handful of board defects, so the gap would remain.
 
