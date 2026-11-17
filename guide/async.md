@@ -143,8 +143,9 @@ export action rename(id: number, title: string, i: number) {    // i: the row's 
   server keeps lets the placeholder be the row.
 - **When the server answers a kind of row in several fetches** (one list per status, per folder, per page), each fetch
   is its own keyed store, row for row in the server's order, so a row shows once. A move guesses the list it leaves
-  and the list it joins. On accept, re-ask the lists named by the action's arguments, plus the list that holds the
-  row now (`latest`): another write of the same row may have been answered first.
+  and the list it joins. On accept, re-ask **every list the row can be in**, not only the two the handler saw: another
+  write of the same row may have been answered first and moved it elsewhere. Don't work out which list holds it now
+  from the screen (`latest`): a list that hasn't answered yet has no value to read, and the read throws.
 - **Work out positions in the handler and pass them in**: an index, a count, a place in the target, computed from
   the screen (a snapshot, R-8). An action that reads a value another action guessed and then guesses is one change
   with that action (H-11, D-33).
