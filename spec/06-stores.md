@@ -293,7 +293,9 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   recorded failure land with that list, in one frame). Solid does the same:
   the action's transition holds until the refresh it started lands.
   Lowers to `createOptimisticStore(fn, seed)`; a plain write to a source
-  that is also guessed by path is not lowered yet. A guess is verdict-inert: an
+  that is also guessed by path is not lowered yet, and the compiler refuses
+  it (until 2026-11-17 it compiled and threw at run time, inside the
+  action's `catch`). A guess is verdict-inert: an
   action that wants `pending? x` true while its guess stands declares
   `affects x` (AC-5; the idiom is in 07 §5).
 - **AC-3a (A guess while its value loads a new question).** [taken by default

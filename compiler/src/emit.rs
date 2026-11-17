@@ -98,6 +98,8 @@ struct Usage {
     optimistic: HashSet<String>,
     paths: HashSet<String>,
     prev_of: HashSet<String>,
+    /// plain writes (not guesses): a question source that is guessed by path and written plainly is not lowered yet
+    plain: HashSet<String>,
 }
 fn usage(programs: &[&Program], extra: &[Vec<Stmt>]) -> Usage {
     let mut u = Usage::default();
@@ -110,6 +112,9 @@ fn usage(programs: &[&Program], extra: &[Vec<Stmt>]) -> Usage {
                 let tname = || target.and_then(|t| t["name"].as_str()).unwrap_or_default().to_string();
                 if k == Some("optimistic") {
                     u.optimistic.insert(tname());
+                }
+                if k == Some("write") && !target.and_then(|t| t["ctx"].as_bool()).unwrap_or(false) {
+                    u.plain.insert(tname());
                 }
                 if matches!(k, Some("write" | "optimistic")) && target.and_then(|t| t["path"].as_array()).is_some_and(|p| !p.is_empty()) {
                     u.paths.insert(tname());
@@ -981,6 +986,9 @@ impl<'p> Gen<'p> {
                 Ok(out)
             }
             Decl::Source { name, init, key, .. } => {
+                if self.u.optimistic.contains(name) && self.u.paths.contains(name) && self.u.plain.contains(name) {
+                    return fail(format!("a plain write to {name}, a source with a question that is also guessed by path, is not lowered yet (06 AC-3): guess the server's answer after the `await` instead (`guess {name} := rs => …`, until the re-ask lands), or guess {name} whole (`guess {name} := rs => …`) rather than by path"));
+                }
                 let lv = self.loading_value(init, env)?;
                 let mode = obj(vec![("optimistic", E::Bool(self.u.optimistic.contains(name))), ("structured", E::Bool(self.u.paths.contains(name))), ("record", E::Bool(matches!(init.k, ExprKind::Rec(_))))]);
                 let x = self.expr(init, env, &Ctx { tail: true, self_: Some(name.clone()), ..Ctx::default() })?;

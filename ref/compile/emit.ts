@@ -34,15 +34,16 @@ const cm = (n: string) => `V$${n}`;   // a component: an uppercase JSX tag
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 // ---------------------------------------------------------------- usage analysis (the oracle's walkers, at compile time)
-type Usage = { optimistic: Set<string>; paths: Set<string>; prevOf: Set<string> };
+type Usage = { optimistic: Set<string>; paths: Set<string>; prevOf: Set<string>; plain: Set<string> };
 function usage(p: Program | Program[], extra: Stmt[][] = []): Usage {
-  const u: Usage = { optimistic: new Set(), paths: new Set(), prevOf: new Set() };
+  const u: Usage = { optimistic: new Set(), paths: new Set(), prevOf: new Set(), plain: new Set() };
   const seen = new WeakSet<object>();
   const walk = (x: unknown, selfName?: string): void => {
     if (!x || typeof x !== "object" || seen.has(x as object)) return; seen.add(x as object);
     if (Array.isArray(x)) { x.forEach(y => walk(y, selfName)); return; }
     const o = x as Record<string, any>;
     if (o.k === "optimistic") u.optimistic.add(o.target.name);
+    if (o.k === "write" && !o.target.ctx) u.plain.add(o.target.name);
     if ((o.k === "write" || o.k === "optimistic") && o.target.path.length) u.paths.add(o.target.name);
     if (o.k === "pending" && (o.e.k === "member" || o.e.k === "index")) { let y = o.e; while (y.k === "member" || y.k === "index") y = y.o; if (y.k === "id") u.paths.add(y.name); }
     if (o.k === "pre" && o.name !== selfName) u.prevOf.add(o.name);
@@ -323,6 +324,7 @@ class Gen {
     if (d.k === "source") {
       if (!d.question) return `${pad}const [${b.js}, ${b.w}] = __rt.source(${J(d.name)}, __rt.untrack(() => ${this.expr(d.init, env, { imp: false })}));\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
       const lv = this.loadingValue(d.init, env);
+      if (this.u.optimistic.has(d.name) && this.u.paths.has(d.name) && this.u.plain.has(d.name)) throw new CompileError(`a plain write to ${d.name}, a source with a question that is also guessed by path, is not lowered yet (06 AC-3): guess the server's answer after the \`await\` instead (\`guess ${d.name} := rs => …\`, until the re-ask lands), or guess ${d.name} whole (\`guess ${d.name} := rs => …\`) rather than by path`);
       const mode = `{ optimistic: ${this.u.optimistic.has(d.name)}, structured: ${this.u.paths.has(d.name)}, record: ${d.init.k === "rec"} }`;
       return `${pad}const [${b.js}, ${b.w}] = __rt.question(${J(d.name)}, (__prev) => ${this.expr(d.init, env, { imp: false, tail: true, self: d.name })}, ${lv}, ${mode}${d.key ? `, ${J(d.key)}` : ""});\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
     }
