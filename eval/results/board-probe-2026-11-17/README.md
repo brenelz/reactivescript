@@ -64,9 +64,11 @@ Mean 5.0. **All three apps used the shape**; none kept a ledger. Traced:
   effects. That is agent code.
 - opus-1 seed 12: the detail of a card in Doing shows "error: declined" when a To do re-ask fails. In the app,
   reading `sel.card.title` throws To do's error. Minimal trail: select a To do card, accept a reorder in To do (To do
-  re-asked), select a Doing card, fail the re-ask. jsdom and oracle repros don't reproduce it. **Open.**
-- Not yet traced: opus-2 seed 20 (heading count after an archive), opus-3 seed 18 (a rename and item add land on the
-  card below the selected one).
+  re-asked), select a Doing card, fail the re-ask. Probably the same family as probe 3's detail tear (solidjs/solid#4990);
+  not yet re-checked against that repro.
+- opus-2 seed 20 (heading count after an archive), minimal trail: select #3, a toggle accepted, a rename, Archive tab,
+  Doing's re-ask lands, archive #3. The heading says 1 and the column shows 2. Not yet reduced.
+- opus-3 seed 18: a rename and an item add land on the card below the selected one. Not yet reduced.
 
 ## Probe 3: re-ask every list the row can be in (desks r15i, `probe3/`)
 
@@ -90,8 +92,11 @@ Traced fuzz families:
 - opus-1 seeds 2, 13, 18 and opus-2 seeds 2, 13: the detail tears after a re-ask fails. opus-1 shows the else branch
   with values from before the selection (`#-1 undefined in`), and opus-2 shows `#4 in`. Minimal trail (opus-1): Doing
   loads while To do and Done are still on their first fetch; move #4 up, then down; select #4; accept the second move
-  (it re-asks all three); fail To do. This looks like the same family as probe 2 opus-1 seed 12. Re-asking every list
-  makes it more frequent. **Open**: jsdom and oracle repros don't reproduce it yet.
+  (it re-asks all three); fail To do. A Solid bug: solidjs/solid#4990 (repro
+  `repro/show-fallback-tear-after-failed-load.spec.tsx`). A `Show` whose condition reads a memo that reads stores through
+  error boundaries mounts its fallback with values from before a held selection. It only happens when another error
+  boundary over a memo of that condition exists, which is what `selIndex = (… where …) catch (e) => -1` compiles to.
+  Re-asking every list makes it more frequent.
 - Count tears (opus-1 seeds 10, 16; opus-2 seeds 10, 14, 20; opus-3 seed 10) match #4987 and #4988.
 - opus-3 "a move into a column that is still loading": the move is allowed and its index is counted from the unloaded
   column. That is agent code.
