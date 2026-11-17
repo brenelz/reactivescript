@@ -105,6 +105,7 @@ named.
 | `HELD_WRITE`                      | S   | AC-1c | S-infer-2 |
 | `STALE_OWN_READ`                  | S   | AC-1d | S-infer-5 |
 | `STALE_WRITE_BACK`                | S   | AC-1e | S-infer-6 |
+| `STALE_CAPTURE`                   | S   | AC-1g | S-infer-7 |
 | `GUESS_NO_QUESTION`          | S   | AC-3 / ST-5c | S-check-1, S-solid-32 |
 | `GUESS_ON_DEFERRED`          | S   | AC-3 / ST-5c (a deferred equation lags its truth, V-16) | S-guess-equation |
 | `GUESS_WHILE_LOADING`        | S   | AC-3a (Solid's `OPTIMISTIC_WRITE_WHILE_LOADING`, at compile time) | S-guess-equation, check.rs unit test |

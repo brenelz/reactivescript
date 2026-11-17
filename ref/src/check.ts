@@ -8,7 +8,7 @@ import type { ModuleSet } from "./modules.ts";
 import type { JsDecl, Shape } from "./parse.ts";
 import { misnested, misnestedInside, P_CLOSERS, P_SCOPE, EMPTY_SHAPE, type Shape } from "./content.ts";
 import { ModelBuilder, type Model, type RegionKind, type CompKind } from "./model.ts";
-import { inferredAction, runFindings, triggerText } from "./infer.ts";
+import { inferredAction, runFindings, scalarType, triggerText, type RunOpts } from "./infer.ts";
 
 const BUILTINS = new Set(["len", "str", "map", "filter", "sum", "fail", "fetch", "every", "indexOf"]);   // the scenario prelude; all pure
 const isHandler = (attr: string) => /^on[A-Z:]/.test(attr);                                   // SC-4
@@ -111,7 +111,7 @@ type Ctx = { scope: "reactive" | "imperative"; inFn?: boolean; inAction?: boolea
 
 // ---------------------------------------------------------------- free names
 /** Free identifiers of an expression (`pre:x` for `pre x`), minus names bound inside it. */
-function freeNames(e: Expr, bound: Set<string>, out: Set<string>): void {
+export function freeNames(e: Expr, bound: Set<string>, out: Set<string>): void {
   const go = (x: Expr) => freeNames(x, bound, out);
   switch (e.k) {
     case "lit": case "use": return;
@@ -232,6 +232,7 @@ class Checker {
   private effectIns: { region: Region; e: Expr; env: Env; line: number }[] = [];
   private apps: { comp: Region; site: Region; line: number; tag: string; args: { field: string; e: Expr; env: Env }[]; passed: { field: string; e: Expr; env: Env }[] }[] = [];   // passed: every attribute, handlers too (O-3)
   private actions: { name: string; body: Stmt[]; env: Env; line: number }[] = [];
+  private scalarAliases = new Set<string>();
   private handlers: { attrs: { name: string; e: Expr }[]; kids: Markup[]; h: Expr; env: Env; region: Region; line: number; what: string }[] = [];   // AC-3a: element handlers, by where they are
   private provisions: { key: string; e: Expr; env: Env }[] = [];
   private importSyms = new Set<Sym>();                                                     // MO-1d: what imports bound; a nested block may not shadow it
@@ -472,7 +473,8 @@ class Checker {
         for (const { alias } of d.names) { const s = env.vars.get(alias); if (s) this.importSyms.add(s); }
         continue;
       }
-      if (d.k === "effect" || d.k === "provide" || d.k === "typedecl") continue;
+      if (d.k === "typedecl") { const m = /^type\s+\w+\s*=\s*([\s\S]*)$/.exec(d.text ?? ""); if (m && scalarType(m[1].trim())) this.scalarAliases.add(d.name); continue; }   // AC-1g: a local alias of a plain value
+      if (d.k === "effect" || d.k === "provide") continue;
       if (d.k === "context") {                                                             // RG-7: a declared context — its identity is the declaration, not its spelling
         if (env.vars.has(d.name)) this.err("DUPLICATE_DECLARATION", "E-7", `${d.name} is declared twice in one block`);
         const contract = (d.type && ROW_WORDS.test(d.type)) || d.exported ? this.contractOf(d.type) : null;   // RG-7e: written rows, or exported (its type is then the contract: no row words, no rows)
@@ -713,7 +715,7 @@ class Checker {
         for (const p of d.params) inner.vars.set(p, { kind: "value", name: p, region: env.region, line: d.line });
         this.comp("action", env, { name: d.name }, () => this.stmts(d.body, inner, { scope: "imperative", inAction: true }));
         this.actions.push({ name: d.name, body: d.body, env: inner, line: d.line });
-        this.runChecks(d.body, true, d.params);
+        this.runChecks(d.body, true, d.params, false, { ptypes: (d.ptypes ?? d.params.map(() => undefined)).map(t => t && this.scalarAliases.has(t.trim()) ? "string" : t), answered: n => { const t = inner.lookup(n); return !!t && t.kind === "source" && !!t.question; } });
         return;
       }
       case "server": {                                                                       // 12 SF-1/SF-3/SF-4: a statement block that runs on the server
@@ -934,8 +936,9 @@ class Checker {
   }
 
   /** AC-1c, AC-1d, AC-1e over one imperative run (ref/src/infer.ts). */
-  private runChecks(stmts: Stmt[], action: boolean, bound: string[], inferred = false) {
-    for (const f of runFindings(stmts, action, bound, inferred)) {
+  private runChecks(stmts: Stmt[], action: boolean, bound: string[], inferred = false, opts: RunOpts = {}) {
+    for (const f of runFindings(stmts, action, bound, inferred, opts)) {
+      if (f.code === "STALE_CAPTURE") { this.err("STALE_CAPTURE", "AC-1g", `${f.name} := … after an \`await\` writes ${f.via}, which holds what the screen showed before that \`await\` (a row passed in, or a read of a source): ${f.name} is the server's answer, and by the time the server answers, that row may have changed (a rename accepted, a reload, an earlier write declined) — write only what the server answered and what ${f.name} holds at the write, found by id (\`${f.name} := rs => …\`), or re-ask it (\`refresh\`)`); continue; }
       if (f.code === "HELD_WRITE") this.err("HELD_WRITE", "AC-1c", `${f.name} := … comes before an \`await\` in a body that is an action because it writes and awaits (AC-1b), so it is held until the body ends (AC-1): for state that shows while the work runs, \`guess ${f.name} := …\` (a source with a question, ST-5c); for a reset that lands now, \`onFlush(() => { ${f.name} := … })\` (EF-8); to hold it on purpose, declare the action (\`action name() { … }\`); or write it after the \`await\``);
       else if (f.code === "STALE_WRITE_BACK") this.err("STALE_WRITE_BACK", "AC-1e", `${f.name} := … after an \`await\` is computed from ${f.name} as it was read before that \`await\`: whatever changed ${f.name} in between (another action, a reload) is overwritten — write functionally (\`${f.name} := v => …\`, W-6), which applies to ${f.name} as it stands at the write, or guess it (\`guess\`, AC-3) and let the answer replace the guess`);
       else this.err("STALE_OWN_READ", "AC-1d", `${f.name} is read after this change wrote it: the read sees the committed value, not the write (W-4) — keep the value you wrote in a local (\`let v = …; ${f.name} := v\`) and read that, or write functionally (\`${f.name} := v => …\`, W-6)`);

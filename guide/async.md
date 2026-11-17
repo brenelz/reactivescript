@@ -267,6 +267,15 @@ export action add(id: string, title: string) {
   (`posted := [...posted, await addComment(…)]`): when a read and a write cross, the read's answer already has the
   new item and your copy adds it again. End the action with `refresh` on the server's list instead. The action's
   guesses stay up until that answer lands (D-34), so the row never blinks out and never shows twice.
+- **After the `await`, write only what is the server's.** A write into an answer after the server answered takes what
+  it answered and what the answer holds at the write, found by id (`cards := rs => …`), never a row, count or place
+  the handler saw: by then the row may have changed (a rename accepted) or be elsewhere (an earlier move declined), and
+  the old one goes back on screen. Pass actions plain values (ids, titles, indexes), not rows; when the answer can't
+  be worked out from those, `refresh` it. The compiler flags a row taken before the `await` (`STALE_CAPTURE`, AC-1g).
+- **A guess and the answer that ends it share a place.** Guess a new row into the store its answer is written to, under
+  a key of its own, so the answer replaces it. A guess in a list of its own ends with a `refresh`, which the action
+  waits for (D-34). Written straight into the answer beside a guess in its own list, the row shows twice whenever
+  another write keeps the guess up.
 - **A failure is the client's, not a guess.** A guess reverts when its action ends; a failure must outlast it, so it
   lives in the client's layer, and a successful retry removes it.
 - **Generate ids on the client** in the handler, before calling the action, so a declined add can be shown again

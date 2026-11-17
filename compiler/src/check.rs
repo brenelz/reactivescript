@@ -8,7 +8,7 @@
 
 use crate::ast::*;
 use crate::content::{misnested, misnested_inside, Shape, P_CLOSERS, P_SCOPE};
-use crate::infer::{inferred_action, run_findings, trigger_text, Code};
+use crate::infer::{inferred_action, run_findings, scalar_type, trigger_text, Code, RunOpts};
 use crate::model::{ModelBuilder, ModelSymbol};
 use crate::modules::ModuleSet;
 use crate::parse::{js_trim, JsDecl, Part, Shape as FShape};
@@ -459,7 +459,7 @@ pub(crate) fn children<'a>(n: Node<'a>, paths: bool) -> Vec<Node<'a>> {
 
 // ---------------------------------------------------------------- free names
 /// Free identifiers of an expression (`pre:x` for `pre x`), minus names bound inside it.
-fn free_names(e: &Expr, bound: &HashSet<String>, out: &mut IndexSet<String>) {
+pub(crate) fn free_names(e: &Expr, bound: &HashSet<String>, out: &mut IndexSet<String>) {
     let go = |x: &Expr, out: &mut IndexSet<String>| free_names(x, bound, out);
     match &e.k {
         ExprKind::Lit(_) | ExprKind::Use(_) => {}
@@ -857,6 +857,8 @@ pub struct Opts<'a> {
 }
 
 pub struct Checker<'a> {
+    /// AC-1g: local type aliases of a plain value
+    scalar_aliases: HashSet<String>,
     /// MO-10d: CN-3e asks what may hold, where a foreign reader counts (R-8 asks what may be absent, where it does not)
     holds_mode: Cell<bool>,
     pub diags: Vec<Diagnostic>,
@@ -952,6 +954,7 @@ impl<'a> Checker<'a> {
             handlers: vec![],
             apps: vec![],
             actions: vec![],
+            scalar_aliases: HashSet::new(),
             provisions: vec![],
             import_syms: HashSet::new(),
             later: vec![],
@@ -1153,7 +1156,15 @@ impl<'a> Checker<'a> {
                     }
                     continue;
                 }
-                Decl::Effect { .. } | Decl::Provide { .. } | Decl::TypeDecl { .. } => continue,
+                Decl::TypeDecl { name, text, .. } => {
+                    // AC-1g: a local alias of a plain value
+                    let rhs = text.splitn(2, '=').nth(1).map(|r| r.trim());
+                    if text.trim_start().starts_with("type") && rhs.map_or(false, scalar_type) {
+                        self.scalar_aliases.insert(name.clone());
+                    }
+                    continue;
+                }
+                Decl::Effect { .. } | Decl::Provide { .. } => continue,
                 Decl::Context { name, ty, source, dflt, line, exported, .. } => {
                     if self.envs[env].vars.contains_key(name) {
                         self.err("DUPLICATE_DECLARATION", "E-7", format!("{} is declared twice in one block", name));
@@ -1828,7 +1839,7 @@ impl<'a> Checker<'a> {
                 });
                 self.own_source_writes(inputs, body, env);
             }
-            Decl::Action { name, params, body, line, .. } => {
+            Decl::Action { name, params, ptypes, body, line, .. } => {
                 let region = self.reg(env);
                 let inner = self.env(Some(env), region);
                 for p in params {
@@ -1836,7 +1847,8 @@ impl<'a> Checker<'a> {
                 }
                 self.comp("action", env, Some(name.clone()), None, |c| c.stmts(body, inner, Ctx { in_action: true, ..Ctx::imperative() }));
                 self.actions.push(ActionRec { name: name.clone(), body, env: inner, line: *line as i64 });
-                self.run_checks(body, true, params, false);
+                let ptypes: Vec<Option<String>> = ptypes.iter().map(|t| t.as_ref().map(|t| if self.scalar_aliases.contains(t.trim()) { "string".to_string() } else { t.clone() })).collect();
+                self.run_checks_with(body, true, params, false, ptypes, Some(inner));
             }
             Decl::Server { name, params, body, line, .. } => {
                 let region = self.reg(env);
@@ -2380,9 +2392,19 @@ impl<'a> Checker<'a> {
     // ---- imperative scope (SC-2) ----
     /// AC-1c, AC-1d, AC-1e over one imperative run (`crate::infer`).
     fn run_checks(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool) {
-        for f in run_findings(stmts, action, bound, inferred) {
+        self.run_checks_with(stmts, action, bound, inferred, vec![], None);
+    }
+    /// `answers_in`: a declared action's scope, where AC-1g asks which names are sources with a question.
+    fn run_checks_with(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, ptypes: Vec<Option<String>>, answers_in: Option<EId>) {
+        let answered = |n: &str| answers_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Source && self.syms[t].question);
+        let found = run_findings(stmts, action, bound, inferred, &RunOpts { ptypes, answered: if answers_in.is_some() { Some(&answered) } else { None } });
+        for f in found {
             let n = &f.name;
             match f.code {
+                Code::StaleCapture => {
+                    let v = f.via.clone().unwrap_or_default();
+                    self.err("STALE_CAPTURE", "AC-1g", format!("{n} := … after an `await` writes {v}, which holds what the screen showed before that `await` (a row passed in, or a read of a source): {n} is the server's answer, and by the time the server answers, that row may have changed (a rename accepted, a reload, an earlier write declined) — write only what the server answered and what {n} holds at the write, found by id (`{n} := rs => …`), or re-ask it (`refresh`)"))
+                }
                 Code::HeldWrite => self.err("HELD_WRITE", "AC-1c", format!("{n} := … comes before an `await` in a body that is an action because it writes and awaits (AC-1b), so it is held until the body ends (AC-1): for state that shows while the work runs, `guess {n} := …` (a source with a question, ST-5c); for a reset that lands now, `onFlush(() => {{ {n} := … }})` (EF-8); to hold it on purpose, declare the action (`action name() {{ … }}`); or write it after the `await`")),
                 Code::StaleOwnRead => self.err("STALE_OWN_READ", "AC-1d", format!("{n} is read after this change wrote it: the read sees the committed value, not the write (W-4) — keep the value you wrote in a local (`let v = …; {n} := v`) and read that, or write functionally (`{n} := v => …`, W-6)")),
                 Code::StaleWriteBack => self.err("STALE_WRITE_BACK", "AC-1e", format!("{n} := … after an `await` is computed from {n} as it was read before that `await`: whatever changed {n} in between (another action, a reload) is overwritten — write functionally (`{n} := v => …`, W-6), which applies to {n} as it stands at the write, or guess it (`guess`, AC-3) and let the answer replace the guess")),
