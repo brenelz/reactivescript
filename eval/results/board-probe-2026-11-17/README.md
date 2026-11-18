@@ -124,7 +124,14 @@ What's left that I had put on Solid:
   select #3; its checklist loads; To do loads; add item "qa 3"; select #1 (held with the add); toggle item 1. Plain-Solid
   versions of the same family: solidjs/solid#4999 (`repro/count-misses-guess-under-held-loading-on.spec.tsx`, plus
   `repro/two-readers-of-row-disagree-under-hold.spec.tsx` in a comment there).
-- opus-1 seeds 10 and 13 now fail as a different detail tear; not yet traced.
+- opus-1 seed 13: a move guess on Doing asks the errored To do again, because the detail's `where` memo reads it
+  through a fresh error boundary. `where` then waits on that ask, so the detail says "in Doing" while the card shows in
+  Done. Solid bug solidjs/solid#5002 (`repro/errored-list-reasked-by-fresh-boundary.spec.tsx`).
+- opus-1 seed 10: after every ask has landed, `selected` stays pending and the detail is stuck on the old card. The
+  trail is 18 steps: a toggle, a save and a move, each re-asking all three lists, with selections in between. Solid bug
+  solidjs/solid#5003 (`repro/select-stuck-pending.spec.tsx`).
+
+So every probe 3 hole I had put on Solid is still a Solid bug on main, now filed as #4998, #4999, #5002 and #5003.
 
 The desk9 hole (opus-1 seed 14) is a guide issue. The handler skips its row guess when `pending? issues`, and that reads
 true while another row guess holds a landed refresh. guide/async.md no longer tells agents to test `pending?` in the
