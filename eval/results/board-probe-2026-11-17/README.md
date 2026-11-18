@@ -102,3 +102,30 @@ Traced fuzz families:
   column. That is agent code.
 - Hidden "the new-card input starts empty when the board opens again" (opus-2, opus-3): agent code.
 - Every app mirrors its column counts into sources through an `effect` (`Count`) to drive the Doing limit.
+
+## Regrade on Solid main 4f3c3c4ce (`regrade-main/`)
+
+The same apps and grader on Solid main 4f3c3c4ce, which has the fixes for #4987, #4988 and #4990 (and #4969–#4972).
+
+| | before (rc.23) | on main |
+|---|---|---|
+| Probe 2 board | 7, 5, 3 (mean 5.0) | 6, 3, 2 (mean 3.67) |
+| Probe 3 board | 9, 8, 12 (mean 9.67) | 7, 8, 11 (mean 8.67) |
+| Desk9 on the one-shape guide (r15j) | 0, 0, 1 | 0, 0, 1 |
+
+The hidden and overlap results are identical. Seven fuzz holes are gone: probe 2's count and toggle tears (#4987, #4988), probe 3 opus-1's three detail tears (#4990), and opus-3 seed 10.
+
+What's left that I had put on Solid:
+- probe 3 opus-2 seed 13 (and very likely seed 2): the detail mounts blank (`#4 in`). New Solid bug, solidjs/solid#4998
+  (`repro/for-mount-blank-after-failed-reask.spec.tsx`). The detail is mounted by `For` after a held selection, and
+  the latest re-ask of a list it reads fails while an older ask is still out.
+- probe 3 opus-2 seeds 14 and 20, and opus-1 seed 16: a toggle clicked on the old detail while a new selection is held.
+  The detail's progress shows the toggle, but the card in its column doesn't. Minimal trail (seed 20): Doing loads;
+  select #3; its checklist loads; To do loads; add item "qa 3"; select #1 (held with the add); toggle item 1. Plain-Solid
+  versions of the same family: solidjs/solid#4999 (`repro/count-misses-guess-under-held-loading-on.spec.tsx`, plus
+  `repro/two-readers-of-row-disagree-under-hold.spec.tsx` in a comment there).
+- opus-1 seeds 10 and 13 now fail as a different detail tear; not yet traced.
+
+The desk9 hole (opus-1 seed 14) is a guide issue. The handler skips its row guess when `pending? issues`, and that reads
+true while another row guess holds a landed refresh. guide/async.md no longer tells agents to test `pending?` in the
+handler.
