@@ -345,7 +345,9 @@ class Gen {
     if (d.key) return `${pad}const ${b.js} = __rt.keyed(${J(d.name)}, ${J(d.key)}, () => ${this.expr(d.e, env, { imp: false, tail: true })}, ${d.e.k === "rec"});${reg}`;
     if (d.e.k === "catch" && !d.deferred) {                                                    // R-f-4 over a tail await: the flight is an inner memo, read through a boundary
       const c = d.e; const inner = new Env(env); if (c.name) inner.vars.set(c.name, { kind: "val", js: mg(c.name) });
-      return `${pad}const i$${d.name} = __rt.memo(${J(d.name)}, (__prev) => ${this.expr(c.e, env, { imp: false, tail: true, self: d.name })}, ${this.loadingValue(c.e, env)});\n${pad}const ${b.js} = __rt.catchMemo(() => i$${d.name}(), (__e) => __rt.isA(__e, ${this.classes(c.classes, env)}), (${c.name ? mg(c.name) : "__e"}) => ${this.expr(c.alt, inner, { imp: false })});${reg}`;
+      const x = this.expr(c.e, env, { imp: false, tail: true, self: d.name }); const m = `(__e) => __rt.isA(__e, ${this.classes(c.classes, env)})`, a = `(${c.name ? mg(c.name) : "__e"}) => ${this.expr(c.alt, inner, { imp: false })}`;
+      const body = c.e.k === "await" ? `__rt.settle(${x}, ${m}, ${a})` : x;                       // a matching rejection is an answer (R-f-4): caught where it is awaited, not by the boundary
+      return `${pad}const i$${d.name} = __rt.memo(${J(d.name)}, (__prev) => ${body}, ${this.loadingValue(c.e, env)});\n${pad}const ${b.js} = __rt.catchMemo(() => i$${d.name}(), (__e) => __rt.isA(__e, ${this.classes(c.classes, env)}), (${c.name ? mg(c.name) : "__e"}) => ${this.expr(c.alt, inner, { imp: false })});${reg}`;
     }
     const fn = d.deferred ? "deferred" : "memo";
     return `${pad}const ${b.js} = __rt.${fn}(${J(d.name)}, (__prev) => ${this.expr(d.e, env, { imp: false, tail: true, self: d.name })}, ${this.loadingValue(d.e, env)});${reg}`;

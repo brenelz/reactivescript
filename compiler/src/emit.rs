@@ -1060,13 +1060,20 @@ impl<'p> Gen<'p> {
                     let i = format!("i${name}");
                     let cls = self.classes(classes.as_deref(), env)?;
                     let a = self.expr(alt, inner, &reactive())?;
+                    let pn = cn.as_ref().map(|n| mg(n)).unwrap_or("__e".into());
+                    // a matching rejection is an answer (R-f-4): caught where it is awaited, not by the boundary
+                    let body = if matches!(ce.k, ExprKind::Await { .. }) {
+                        rtc("settle", vec![x, arrow(&["__e"], rtc("isA", vec![id("__e"), cls.clone()])), arrow(&[&pn], a.clone())])
+                    } else {
+                        x
+                    };
                     let out = vec![
-                        konst(i.clone(), rtc("memo", vec![str(name.clone()), arrow(&["__prev"], x), lv])),
+                        konst(i.clone(), rtc("memo", vec![str(name.clone()), arrow(&["__prev"], body), lv])),
                         konst(
                             b.js.clone(),
                             rtc(
                                 "catchMemo",
-                                vec![thunk(call(id(i), vec![])), arrow(&["__e"], rtc("isA", vec![id("__e"), cls])), arrow(&[&cn.as_ref().map(|n| mg(n)).unwrap_or("__e".into())], a)],
+                                vec![thunk(call(id(i), vec![])), arrow(&["__e"], rtc("isA", vec![id("__e"), cls])), arrow(&[&pn], a)],
                             ),
                         ),
                     ];

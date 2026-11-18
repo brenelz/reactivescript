@@ -228,6 +228,8 @@ export function createApp(opts: { root: any; api?: Record<string, (...a: any[]) 
       return (...a: unknown[]) => { const p = run(...a); p.catch(e => { app.asyncError = e; }); return p; };
     },
     awaited: (v: unknown) => v instanceof Flight ? v.first : v,
+    /** `x = await f() catch (e: C) => alt` (R-f-4): a matching rejection lands `alt` as the answer; others reject on. */
+    settle: (p: unknown, match: (err: unknown) => boolean, alt: (err: unknown) => unknown) => p && typeof (p as Promise<unknown>).then === "function" ? (p as Promise<unknown>).then(v => v, err => { if (match(err)) return alt(err); throw err; }) : p,
     /** RG-8: Solid's Portal — client-only: the server renders nothing for it, the browser renders it once it has the page. */
     Portal: WebPortal,
     /** CSS-2: a dynamic class with the view's scope class after it. */
