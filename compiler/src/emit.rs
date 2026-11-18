@@ -5,7 +5,7 @@
 //! module is a tree (`js.rs`), never text (CP-3).
 
 use crate::ast::{Decl, Expr, ExprKind, Lit, Markup, MarkupKind, PathSeg, Program, Stmt, StmtKind};
-use crate::awaits::{is_handler, non_tail_awaits, view_readers};
+use crate::awaits::{inner_catches, is_handler, non_tail_awaits, view_readers};
 use crate::check::{children, unwrap_server, Node};
 use crate::js::*;
 use crate::modules::ModuleSet;
@@ -260,6 +260,7 @@ struct Gen<'p> {
     /// CSS-2: the scope class of the view being emitted
     style_hash: Option<String>,
     hoisted: HashMap<*const Expr, String>,
+    hoisted_catch: HashMap<*const Expr, String>,
     hoist_seq: usize,
     frames: Vec<Frame>,
     style_ids: u32,
@@ -291,6 +292,7 @@ impl<'p> Gen<'p> {
             sf_seq: 0,
             style_hash: None,
             hoisted: HashMap::new(),
+            hoisted_catch: HashMap::new(),
             hoist_seq: 0,
             frames: vec![],
             style_ids: 0,
@@ -922,7 +924,11 @@ impl<'p> Gen<'p> {
         let b = self.frames[env].vars.get(name).unwrap().clone();
         let mut out = match d {
             Decl::Source { question: true, init, .. } => self.hoist(Some(name), init, env, true)?,
-            Decl::Eq { e, .. } if !matches!(&e.k, ExprKind::Draft { .. }) => self.hoist(Some(name), e, env, true)?,
+            Decl::Eq { e, .. } if !matches!(&e.k, ExprKind::Draft { .. }) => {
+                let mut v = self.hoist(Some(name), e, env, true)?;
+                v.append(&mut self.hoist_catches(name, e, env)?);
+                v
+            }
             _ => vec![],
         };
         out.append(&mut self.value1(d, env, &b)?);
@@ -961,6 +967,39 @@ impl<'p> Gen<'p> {
             if let Some(n) = name {
                 out.push(sexpr(rtc("hoisted", vec![str(n), id(v)])));
             }
+        }
+        Ok(out)
+    }
+    /// R-f-4: each catch inside an equation gets one boundary, made once beside it (awaits.rs `inner_catches`).
+    fn hoist_catches(&mut self, name: &str, e: &Expr, env: Env) -> R<Vec<S>> {
+        let mut out = vec![];
+        for h in inner_catches(e) {
+            let ExprKind::Catch { e: x, name: cn, classes, alt } = &h.node.k else { unreachable!() };
+            let v = format!("c${}${}", name, self.hoist_seq);
+            self.hoist_seq += 1;
+            let mut guards = vec![];
+            for g in &h.guards {
+                let x = self.expr(g.e, env, &reactive())?;
+                guards.push(if g.nullish { bin("==", x, E::Null) } else if g.neg { not(x) } else { x });
+            }
+            let inner = self.new_env(Some(env));
+            if let Some(n) = cn {
+                self.set(inner, n, val(mg(n)));
+            }
+            let body = self.expr(x, env, &reactive())?;
+            let cls = self.classes(classes.as_deref(), env)?;
+            let a = self.expr(alt, inner, &reactive())?;
+            let p = cn.as_ref().map(|n| mg(n)).unwrap_or("__e".into());
+            let f = if guards.is_empty() {
+                body
+            } else {
+                let mut it = guards.into_iter();
+                let first = it.next().unwrap();
+                let c = it.fold(first, |a, b| bin("&&", a, b));
+                E::Cond(Box::new(c), Box::new(body), Box::new(undef()))
+            };
+            self.hoisted_catch.insert(h.node as *const Expr, v.clone());
+            out.push(konst(v, rtc("catchMemo", vec![thunk(f), arrow(&["__e"], rtc("isA", vec![id("__e"), cls])), arrow(&[&p], a)])));
         }
         Ok(out)
     }
@@ -1342,6 +1381,7 @@ impl<'p> Gen<'p> {
             // R-f-3
             ExprKind::Throw(x) => rtc("throw", vec![self.expr(x, env, &sub)?]),
             // R-f-4: over a sync value, or the tail await's promise/stream
+            ExprKind::Catch { .. } if !ctx.imp && self.hoisted_catch.contains_key(&(e as *const Expr)) => call(id(self.hoisted_catch[&(e as *const Expr)].clone()), vec![]),
             ExprKind::Catch { e: x, name, classes, alt } => {
                 if ctx.imp && has_await_json(&x.to_json()) {
                     return fail("`await … catch` inside an expression of imperative scope (AWAIT_IN_EXPRESSION, AC-1)");

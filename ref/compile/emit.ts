@@ -5,7 +5,7 @@
 // oracle's (ref/oracle/lower.ts); this file only makes them at compile time.
 import type { Decl, Expr, Markup, Program, Stmt } from "../src/ast.ts";
 import { singleModule, type ModuleSet } from "../src/modules.ts";
-import { nonTailAwaits, viewReaders } from "../src/awaits.ts";
+import { innerCatches, nonTailAwaits, viewReaders } from "../src/awaits.ts";
 import { inferredAction } from "../src/infer.ts";
 import { transform } from "@solidjs/compiler";
 import { unwrapServer } from "../src/check.ts";
@@ -298,7 +298,7 @@ class Gen {
       return `${hoisted}${pad}__rt.provide(${this.ref(d.name, env, { imp: false })}, ${entry});`;
     }
     const b = env.vars.get((d as { name: string }).name)!;
-    const hoist = d.k === "source" && d.question ? this.hoist(d.name, d.init, env, pad) : d.k === "eq" && d.e.k !== "draft" ? this.hoist(d.name, d.e, env, pad) : "";
+    const hoist = d.k === "source" && d.question ? this.hoist(d.name, d.init, env, pad) : d.k === "eq" && d.e.k !== "draft" ? [this.hoist(d.name, d.e, env, pad), this.hoistCatches(d.name, d.e, env, pad)].filter(Boolean).join("\n") : "";
     if (hoist) return hoist + "\n" + this.value1(d, env, ind, b);
     return this.value1(d, env, ind, b);
   }
@@ -313,6 +313,19 @@ class Gen {
       this.hoisted.set(h.node, v);
       const lv = h.node.init ? `__rt.firstPaint(() => ${this.expr(h.node.init, env, { imp: false })})` : "undefined";
       return `${pad}const ${v} = __rt.memo(${J(name)}, () => ${guards.length ? `(${guards.join(" && ")}) ? ${body} : undefined` : body}, ${this.clientCall(h.node.e, env) ? `__rt.clientQuestion(${lv})` : lv});${name ? `\n${pad}__rt.hoisted(${J(name)}, ${v});` : ""}`;
+    }).join("\n");
+  }
+  /** R-f-4: each catch inside an equation gets one boundary, made once beside it (awaits.ts `innerCatches`). */
+  private hoistedCatch = new Map<Expr, string>();
+  private hoistCatches(name: string, e: Expr, env: Env, pad: string): string {
+    return innerCatches(e).map(h => {
+      const v = `c$${name}$${this.hoistSeq++}`;
+      const guards = h.guards.map(g => { const x = this.expr(g.e, env, { imp: false }); return g.nullish ? `(${x}) == null` : g.neg ? `!(${x})` : `(${x})`; });
+      const c = h.node; const inner = new Env(env); if (c.name) inner.vars.set(c.name, { kind: "val", js: mg(c.name) });
+      const body = this.expr(c.e, env, { imp: false });
+      const out = `${pad}const ${v} = __rt.catchMemo(() => ${guards.length ? `(${guards.join(" && ")}) ? ${body} : undefined` : body}, (__e) => __rt.isA(__e, ${this.classes(c.classes, env)}), (${c.name ? mg(c.name) : "__e"}) => ${this.expr(c.alt, inner, { imp: false })});`;
+      this.hoistedCatch.set(c, v);
+      return out;
     }).join("\n");
   }
   private hoistAll(es: Expr[], env: Env, pad: string): string[] { return es.map(x => this.hoist(null, x, env, pad, false)).filter(Boolean); }
@@ -452,6 +465,7 @@ class Gen {
       case "if": return `(${go(e.c)} ? ${this.expr(e.t, env, ctx)} : ${this.expr(e.f, env, ctx)})`;
       case "throw": return `__rt.throw(${go(e.e)})`;                                          // R-f-3
       case "catch": {                                                                           // R-f-4: over a sync value, or the tail await's promise/stream
+        if (!ctx.imp && this.hoistedCatch.has(e)) return `${this.hoistedCatch.get(e)}()`;
         if (ctx.imp && this.hasAwait(e.e)) throw new CompileError("`await … catch` inside an expression of imperative scope (AWAIT_IN_EXPRESSION, AC-1)");
         const inner = new Env(env); if (e.name) inner.vars.set(e.name, { kind: "val", js: mg(e.name) });
         return `__rt.${ctx.imp ? "tryCatch" : "catchRead"}(() => ${this.expr(e.e, env, sub)}, (__e) => __rt.isA(__e, ${this.classes(e.classes, env)}), (${e.name ? mg(e.name) : "__e"}) => ${this.expr(e.alt, inner, sub)})`;
