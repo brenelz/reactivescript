@@ -62,9 +62,9 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
   Give each pane its own, so one pane's failure never touches another.
 - **A failure is shown where it's read.** A value that failed is failed for every reader, and derivations over it are
   plain code: no `catch` inside them. A pane that also shows another pane's data (a detail's heading taken from the
-  list) puts those readers in an `errored` region of their own, whose fallback can show what the pane has itself.
-  Otherwise the other pane's failure shows in this pane's region as its own, and this pane's retry asks the wrong
-  thing.
+  list) puts those readers in an `errored` region of their own, whose fallback shows what the pane has itself (or
+  nothing), never the other pane's error: that pane already shows its failure, and this pane didn't ask. Otherwise
+  the other pane's failure shows in this pane as its own, and this pane's retry asks the wrong thing.
 - **Handlers and actions read only their own pane.** A click reads what its pane shows (the row, the list it is in,
   its index) and passes it on as plain values. A read of another pane's data in a handler takes that pane's failure
   too, and no region can show it there: the read throws. When a write changes more than its pane, it re-asks the
