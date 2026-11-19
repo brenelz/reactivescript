@@ -96,7 +96,7 @@ Expr      ::= TypeScript's, without assignment, `this`, `function`, `new` on rea
   question (H-12, D-41).
 - A value borrowed from another section (a list passed into a detail) carries that section's failures: put its
   readers in an `errored` region of their own, or the other section's error shows in this one.
-- Handlers read only their own pane's data, and pass it on as plain values.
+- A handler reads what its region shows, and passes it on as plain values.
 - `throw NotFound(id)` in an equation's arm is a failure value: `found(it, id) => it == null ? throw NotFound(id) : it`.
 
 ## Collections

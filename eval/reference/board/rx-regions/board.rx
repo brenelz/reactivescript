@@ -291,7 +291,7 @@ export component BoardPage() {
       <Column col="done" ans={doneAns} rows={done} retrying={false} left="doing" right="" leftOpen={intoDoing} rightOpen={false}
         onRetry={() => { retry("done") }} onSelect={id => { pick(id) }} onMove={(id, f, c, by) => { let m = moveOf(id, f, c, by); if (m != null) { move(m) } }} />
       <section data-testid="detail" style="min-width: 16rem">
-        {errored fallback(e) { <p>select a card</p> } {
+        {errored fallback(e) { <p>can't show this card right now</p> } {
         {if sel == null {
           <p>select a card</p>
         } else {

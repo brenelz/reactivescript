@@ -44,17 +44,16 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
   `latest city` is what was typed.
 - The first load has nothing to show yet: wrap the readers in `loading fallback { <p>loading…</p> } { … }`. To
   show the fallback again each time a key changes (a new selection, not a refinement), use `loading on(selected)`.
-- An answer read beyond its own pane (another pane, a count, a button's `disabled`) needs a value before it lands,
-  or every one of those readers waits with it, and so does every reader of a store over it: a re-ask of one list
-  then puts every pane that reads it back to loading. Give the answer its value where it's declared, and lay the
-  store over it:
+- An answer read outside the region that loads it (elsewhere on the page, a count, a button's `disabled`) needs a
+  value before it lands, or every one of those readers waits with it, and so does every reader of a store over it.
+  Give the answer its value where it's declared, and lay the store over it:
 
   ```rx
   source folderAns = await fetchFolder(name) -> null           // null until the first answer (R-7)
-  messages key id = folderAns == null ? [] : folderAns         // the store the panes read and the guesses go on
+  messages key id = folderAns == null ? [] : folderAns         // the store the page reads and the guesses go on
   ```
 
-  Its own pane shows loading while `folderAns == null`; every other pane reads `messages` and never waits.
+  Its own `loading` region shows while `folderAns == null`; every other reader reads `messages` and never waits.
 
 ## 2. Failures: a region where they're read
 
@@ -63,16 +62,15 @@ loaded) is shown by an `errored` region where it's read; nothing else handles it
 client's own state: a plain source the action's `catch` writes, shown beside the thing it failed on (section 3).
 
 - `errored fallback(e) { <p>failed: {e.message}</p> } { … }` shows a failure in place of the content under it.
-  Give each pane its own, so one pane's failure never touches another.
+  Give each answer's readers their own, so one answer's failure never takes down what doesn't read it.
 - **A failure is shown where it's read.** A value that failed is failed for every reader, and derivations over it are
-  plain code: no `catch` inside them. A pane that also shows another pane's data (a detail's heading taken from the
-  list) puts those readers in an `errored` region of their own, whose fallback can show what the pane has itself.
-  Otherwise the other pane's failure shows in this pane's region as its own, and this pane's retry asks the wrong
-  thing.
-- **Handlers and actions read only their own pane.** A click reads what its pane shows (the row, the list it is in,
-  its index) and passes it on as plain values. A read of another pane's data in a handler takes that pane's failure
-  too, and no region can show it there: the read throws. When a write changes more than its pane, it re-asks the
-  answers it can touch (section 3) instead of reading them.
+  plain code: no `catch` inside them. What needs several answers (a row found by searching several
+  lists) fails when any of them fails. Put those readers in an `errored` region of their own, whose fallback says it
+  can't show that part right now, so what reads other answers beside it stays.
+- **A handler reads what its region shows**, the row, the list it is in, its index, and passes them on as plain
+  values. A handler that reads an answer its region doesn't show takes that answer's failure too, and no region can
+  show it there: the read throws. When a write changes more than its own list, it re-asks the answers it can touch
+  (section 3) instead of reading them.
 - `catch` follows an `await` and nothing else: `await fetchUser(id) catch (e: NotFound) => null` makes that rejection
   the answer. Use it when a rejection means something the page shows as data (missing, empty), not to hide a failure.
 - A rule the user breaks (a field left empty) is a value, not a failure: `fn problem(s) => s.name == "" ? "Name is
@@ -166,7 +164,7 @@ export action rename(id: number, title: string, i: number) {    // i: the row's 
   id it is inert (no controls, since the server doesn't know it yet) and the re-ask replaces it; a client id the
   server keeps lets the placeholder be the row.
 - **When the server answers a kind of row in several fetches** (one list per status, per folder, per page), each fetch
-  is its own keyed store, row for row in the server's order, so a row shows once. Each list's pane has its own
+  is its own keyed store, row for row in the server's order, so a row shows once. Each list has its own
   `loading` value and `errored` region (sections 1 and 2), so no fetch holds or fails another. A move guesses the list it leaves
   and the list it joins. On accept, re-ask **every list the row can be in**, not only the two the handler saw: another
   write of the same row may have been answered first and moved it elsewhere. Don't work out which list holds it now

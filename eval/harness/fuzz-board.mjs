@@ -25,10 +25,13 @@
 //   "(adding…)" row may stay after its answer (accepted or declined) while other work is in the air; and a card's
 //   count may keep a declined toggle or item add while other work is in the air. At rest none of these.
 // - Two accepted writes to one field: settled, the field must show the server's last answer (Ryan, 2026-11-14).
+// - B5: while a column has failed, the detail may show its errored fallback, but never a wrong column or title.
 // - B4 (follows from that ruling): while anything is in the air, a card's count may keep accepted toggles of an item
 //   that was toggled more than once in that busy period, since their answers may have come back in another order than
 //   the clicks (the screen keeps the last click until its re-ask lands). At rest, the server's count.
-// Usage: node harness/fuzz-board.mjs <dir> [--seeds N] [--steps N] [--from S] [--json out.json] [--log]
+// Usage: node harness/fuzz-board.mjs <dir> [--seeds N] [--steps N] [--from S] [--json out.json] [--log] [--others]
+// (--others, exploratory, not a grader: another user also moves and renames cards; settled, the columns must match one
+// state the server was in. Separate column fetches can straddle such a change in every arm, so it is not fair as is.)
 // (--r9 and --r15 are accepted and ignored, so harness/grade.sh can pass its round flag.)
 import { writeFileSync } from "node:fs";
 import path from "node:path";
@@ -98,13 +101,18 @@ const CARD = /^#(\d+) (.*) · (\d+)\/(\d+)$/;
 const ADDING = /^(.*) \(adding…\)$/;
 
 /** one session; returns the violations it found (each with the step and the log so far) */
-async function session(browser, url, seed, steps, log) {
+async function session(browser, url, seed, steps, log, others = false) {
   const r = rng(seed); const pick = xs => xs[Math.floor(r() * xs.length)];
   const page = await browser.newPage();
   const errors = []; page.on("pageerror", e => errors.push(e.message));
   const settle = () => page.waitForTimeout(60);
   const sel = id => `[data-testid="${id}"]`;
   const srv = freshServer();
+  // --others: another user changes the board too. The fake server records every board state it has been in; settled,
+  // the columns must match ONE of them (stale is fine, a mix of two moments is not: Ryan, 2026-11-12)
+  const moments = [];
+  const moment = () => { const m = JSON.stringify(COLS.map(col => srv.cols[col].map(c => `${c.id}:${c.title}`).sort())); if (moments[moments.length - 1] !== m) moments.push(m); };
+  moment();
   const ui = { page: "board", selected: null, visit: 0 };
   const writeVisit = new Map();          // write key -> the visit (board or archive) it was made on
   const settledCount = new Map();
@@ -193,14 +201,24 @@ async function session(browser, url, seed, steps, log) {
       const col = COLS.find(cl => b[cl]?.rows.some(x => x.id === target));
       const x = col && b[col].rows.find(y => y.id === target);
       if (x) {
-        if (!detail.includes(`in ${NAME[col]}`)) note("detail column", `#${x.id} shows in ${NAME[col]}, the detail says "${detail.slice(0, 80)}"`);
-        if (!detail.includes(`#${x.id} ${x.title}`)) note("two views", `card "${x.text}", detail "${detail.slice(0, 80)}"`);
+        // B5 (Ryan, 2026-11-19): the detail finds its card in every column, so while one of them has failed it may show
+        // its errored fallback (that it can't show the card now) instead; it must still never name a wrong column or title
+        const failed = (await Promise.all(COLS.map(cl => exists(`retry-${cl}`)))).some(Boolean);
+        const wrongCol = COLS.some(cl => cl !== col && detail.includes(`in ${NAME[cl]}`));
+        if (failed ? wrongCol : !detail.includes(`in ${NAME[col]}`)) note("detail column", `#${x.id} shows in ${NAME[col]}, the detail says "${detail.slice(0, 80)}"`);
+        if (!detail.includes(`#${x.id} ${x.title}`) && (!failed || detail.includes(`#${x.id} `))) note("two views", `card "${x.text}", detail "${detail.slice(0, 80)}"`);
         const prog = await text("progress"); const m = prog && prog.match(/^(\d+)\/(\d+) done$/);
         const list = await text("checklist");
         if (m && list && !/loading|error/.test(list) && (Number(m[1]) !== x.done || Number(m[2]) !== x.total)) note("count", `card "${x.text}", progress "${prog}"`);
       }
     }
     if (!settled || lateVisit || !COLS.every(col => b[col])) return;
+    if (others) {
+      if (COLS.some(col => b[col].rows.some(x => x.adding))) { note("settled", `an "(adding…)" row with nothing in the air`); return; }
+      const shown = JSON.stringify(COLS.map(col => b[col].rows.map(x => `${x.id}:${x.title}`).sort()));
+      if (!moments.includes(shown)) note("settled: no single moment", `the columns show ${COLS.map(col => `${NAME[col]} [${b[col].rows.map(x => `#${x.id} ${x.title}`)}]`).join(", ")}: no state the server was ever in`);
+      return;
+    }
     for (const col of COLS) {
       const want = srv.cols[col].map(c => withCounts(srv, c));
       const got = b[col].rows;
@@ -225,7 +243,8 @@ async function session(browser, url, seed, steps, log) {
     const fail = r() < (WRITES.has(name) ? 0.3 : 0.1);
     const times = Math.max(1, (await page.evaluate(k => globalThis.__flights.asked().filter(x => x === k).length, key)) - (settledCount.get(key) ?? 0));
     settledCount.set(key, (settledCount.get(key) ?? 0) + times);
-    let a; for (let t = 0; t < times; t++) { const x = answer(srv, key, fail); if (!a || a.fail) a = x; }   // one answer reaches every asker: the first that the server accepted
+    let a; for (let t = 0; t < times; t++) { const x = answer(srv, key, fail); if (!a || a.fail) a = x; }
+    moment();   // one answer reaches every asker: the first that the server accepted
     if (WRITES.has(name) && !a.fail && writeVisit.get(key) !== ui.visit) lateVisit = true;   // B1
     if (a.fail && (name === "toggleItem" || name === "addItem")) heldDeclined.push(key);    // B3
     if (!a.fail && name === "toggleItem") heldTwice.push(key);                              // B4
@@ -233,6 +252,15 @@ async function session(browser, url, seed, steps, log) {
     trail.push(`${a.fail ? "fail" : "land"} ${key}`);
     await page.evaluate(([k, a]) => a.fail ? globalThis.__flights.fail(k, "declined") : globalThis.__flights.land(k, a.value), [key, a]);
     await settle();
+  }
+
+  // another user: moves a card to the end of another column, or renames one; the app isn't told
+  function otherUser() {
+    const all = COLS.flatMap(col => srv.cols[col].map(c => [col, c])); if (!all.length) return;
+    const [col, c] = pick(all);
+    if (r() < 0.6) { const to = pick(COLS.filter(x => x !== col)); srv.cols[col] = srv.cols[col].filter(x => x.id !== c.id); srv.cols[to].push(c); trail.push(`other: #${c.id} to ${NAME[to]}`); }
+    else { c.title = `${pick(TITLES)}'`; trail.push(`other: #${c.id} renamed ${c.title}`); }
+    moment();
   }
 
   async function move() {
@@ -285,6 +313,7 @@ async function session(browser, url, seed, steps, log) {
     for (let s = 0; s < steps && !found.length; s++) {
       await track();
       const keys = await pending();
+      if (others && r() < 0.12) { otherUser(); await everyFrame((await pending()).length === 0); continue; }
       if (keys.length && r() < 0.4) await answerOne(keys); else await move().catch(e => { trail.push(`(move failed: ${e.message.split("\n")[0].slice(0, 80)})`); });
       await track();
       await everyFrame((await pending()).length === 0);
@@ -301,14 +330,14 @@ async function session(browser, url, seed, steps, log) {
   return found.slice(0, 1);
 }
 
-export async function fuzz(dir, { seeds = 20, steps = 30, from = 1, log = false } = {}) {
+export async function fuzz(dir, { seeds = 20, steps = 30, from = 1, log = false, others = false } = {}) {
   const b = await build(dir);
   if (!b.ok) return { dir, build: false, seeds, violations: [] };
   const server = await serve(b.dist); let browser = await launch();
   const violations = [];
   try {
     for (let s = from; s < from + seeds; s++) {
-      try { let t; violations.push(...await Promise.race([session(browser, server.url, s, steps, log), new Promise((_, rej) => { t = setTimeout(() => rej(new Error("session timed out (120 s): the page hangs")), 120000); })]).finally(() => clearTimeout(t))); }
+      try { let t; violations.push(...await Promise.race([session(browser, server.url, s, steps, log, others), new Promise((_, rej) => { t = setTimeout(() => rej(new Error("session timed out (120 s): the page hangs")), 120000); })]).finally(() => clearTimeout(t))); }
       catch (e) { violations.push({ seed: s, step: -1, kind: "page crash", detail: e.message.split("\n")[0].slice(0, 120), trail: [] }); await browser.close().catch(() => {}); browser = await launch(); }
     }
   } finally { await browser.close(); server.close(); }
@@ -317,7 +346,7 @@ export async function fuzz(dir, { seeds = 20, steps = 30, from = 1, log = false 
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const a = process.argv.slice(2); const opt = (k, d) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : d; };
-  const res = await fuzz(path.resolve(a[0]), { seeds: Number(opt("--seeds", 20)), steps: Number(opt("--steps", 30)), from: Number(opt("--from", 1)), log: a.includes("--log") });
+  const res = await fuzz(path.resolve(a[0]), { seeds: Number(opt("--seeds", 20)), steps: Number(opt("--steps", 30)), from: Number(opt("--from", 1)), log: a.includes("--log"), others: a.includes("--others") });
   console.log(`${path.basename(res.dir)}: ${res.build ? `${res.violations.length}/${res.seeds} seeds found a hole` : "build failed"}`);
   for (const v of res.violations) console.log(`  seed ${v.seed} step ${v.step}: ${v.kind}: ${v.detail}\n    ${v.trail.join(" ; ")}`);
   if (opt("--json")) writeFileSync(opt("--json"), JSON.stringify(res, null, 2) + "\n");
