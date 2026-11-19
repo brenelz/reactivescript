@@ -45,8 +45,16 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
 - The first load has nothing to show yet: wrap the readers in `loading fallback { <p>loading…</p> } { … }`. To
   show the fallback again each time a key changes (a new selection, not a refinement), use `loading on(selected)`.
 - An answer read beyond its own pane (another pane, a count, a button's `disabled`) needs a value before it lands,
-  or every one of those readers waits with it: give it one where it's declared, `await fetchFolder(name) -> null`
-  (R-7). Its own pane shows loading while it's `null`.
+  or every one of those readers waits with it, and so does every reader of a store over it: a re-ask of one list
+  then puts every pane that reads it back to loading. Give the answer its value where it's declared, and lay the
+  store over it:
+
+  ```rx
+  source folderAns = await fetchFolder(name) -> null           // null until the first answer (R-7)
+  messages key id = folderAns == null ? [] : folderAns         // the store the panes read and the guesses go on
+  ```
+
+  Its own pane shows loading while `folderAns == null`; every other pane reads `messages` and never waits.
 
 ## 2. Failures: a region where they're read
 
@@ -200,24 +208,24 @@ A guess belongs to its action, and the screen it guessed on waits for that actio
 
 In .rx, state is not tied to components: a `source` can be declared in a module, a component or a region, and a
 component only reads and calls what it is given. So give each value one lifetime, and declare it where that lifetime
-is. There are three:
+is:
 
-- **The visit.** What a page asks for and its inputs: asked when the page opens, gone when it closes.
-- **The write.** A write lives until the server answers, which can be after its page closed. Its guess lives exactly
-  as long, and so does whatever it re-asks.
+- **The app.** What every page shares and that outlives any one of them (the signed-in user, a setting the whole app
+  reads): a module.
+- **The visit.** What a page asks for, its stores and guesses, the writes made on it and their errors, and its
+  inputs: declared in the page's component, asked when the page opens, gone when it closes. Opening the page again
+  starts it as the app starts. A write still out when its page closes changes nothing on the next visit: the page
+  asks the server again.
 - **The screen.** What copies what is shown lives where it is shown, inside the region that shows it.
 
-When one value would need two lifetimes, split it into two values:
+So a page's lists and their actions are declared in the page component, not in a module, and a page that is not
+open asks nothing. Don't move a page's data to a module with a counter that reloads it on each visit: the inputs,
+errors and guesses of the last visit then show on the next.
 
-- **A list a write re-asks** is needed by the visit and by the write, so it outlives both: declare it, the writes and
-  their actions in a module (top-level `source`s and `action`s), and let the page read it. The visit becomes a
-  counter its question reads, moved by opening the page (`source visit := -1`,
-  `items = visit >= 0 ? await loadItems(filter) : []`). A module's question is asked when the app starts, so the
-  counter starts below the guard and the first open asks; start it at `0` only for the page the app opens on.
 - **A write whose answer is the new value** (a save that returns the saved settings) writes that answer and re-asks
-  nothing, so its data needs only the visit and stays in the page.
+  nothing.
 - **A count in a tab** copies the rows on screen, so it is an `effect` in a component inside the list's region
-  (`<OpenCount n={rows.length} … />` under the list's `loading`), not beside the module: outside the region it waits
+  (`<OpenCount n={rows.length} … />` under the list's `loading`), not beside the list: outside the region it waits
   for every re-ask of the list and misses the guesses the rows already show.
 
 ## 4. Things that look like bugs and aren't
