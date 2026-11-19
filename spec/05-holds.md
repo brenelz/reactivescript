@@ -486,8 +486,9 @@ S-5 (two roots as two branches of one app — MO-1c; DV-17); since #4695
 S-46, S-48, S-49 and S-50. Two of Solid's rows are not ported: S-45 (a
 first answer and an action landing in one tick — a scenario instant carries
 one event) and S-47 (`try/catch` around a reactive read, D-42 — `.rx` has
-no such form: a reactive `catch` (R-f-4) lowers to an error boundary,
-which is a channel, and `try` is imperative only). Divergences found and fixed
+no such form: a reactive failure is taken by an `errored` region, which
+is a channel, a `catch` follows only an `await` (R-f-4), and `try` is
+imperative only). Divergences found and fixed
 by porting are recorded in the rule they changed. Solid's probe columns
 (`latest(x)`, `isPending(x)` beside a screen) are untracked reads; an
 on-screen probe in a held lane of `latest` readers keeps what it showed

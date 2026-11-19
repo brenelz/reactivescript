@@ -44,18 +44,32 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
   `latest city` is what was typed.
 - The first load has nothing to show yet: wrap the readers in `loading fallback { <p>loading…</p> } { … }`. To
   show the fallback again each time a key changes (a new selection, not a refinement), use `loading on(selected)`.
+- An answer read beyond its own pane (another pane, a count, a button's `disabled`) needs a value before it lands,
+  or every one of those readers waits with it: give it one where it's declared, `await fetchFolder(name) -> null`
+  (R-7). Its own pane shows loading while it's `null`.
 
-## 2. Failures: a boundary or a value
+## 2. Failures: a region where they're read
 
 - `errored fallback(e) { <p>failed: {e.message}</p> } { … }` shows a failure in place of the content under it.
   Give each pane its own, so one pane's failure never touches another.
-- A pane that borrows another pane's data (a detail reading the list's title, passed in as a prop) catches that read:
-  `heading = props.rows.find(r => r.id == props.id)?.title catch (e) => item.title`. Uncaught, the list's failure
-  shows in the detail's boundary as the detail's own, and the detail's retry asks the wrong thing.
-- `x catch (e) => e.message` turns a failure into a value, for showing it inline.
+- **A failure is shown where it's read.** A value that failed is failed for every reader, and derivations over it are
+  plain code: no `catch` inside them. A pane that also shows another pane's data (a detail's heading taken from the
+  list) puts those readers in an `errored` region of their own, whose fallback can show what the pane has itself.
+  Otherwise the other pane's failure shows in this pane's region as its own, and this pane's retry asks the wrong
+  thing.
+- **Handlers and actions read only their own pane.** A click reads what its pane shows (the row, the list it is in,
+  its index) and passes it on as plain values. A read of another pane's data in a handler takes that pane's failure
+  too, and no region can show it there: the read throws. When a write changes more than its pane, it re-asks the
+  answers it can touch (section 3) instead of reading them.
+- `catch` follows an `await` and nothing else: `await fetchUser(id) catch (e: NotFound) => null` makes that rejection
+  the answer. Use it when a rejection means something the page shows as data (missing, empty), not to hide a failure.
+- A rule the user breaks (a field left empty) is a value, not a failure: `fn problem(s) => s.name == "" ? "Name is
+  required" : ""`, shown next to the field.
 - An answer that means "missing" (`null`) is a failure you declare: `export error NotFound(id: number) => …`, and
   `found(await fetchUser(id), id)` with `fn found(it, id) => it == null ? throw NotFound(id) : it`.
 - Retry is `refresh x`. It is quiet (AC-4): the failure stays on screen until the new answer replaces it (H-12).
+  Show the retry's progress in the content, not the fallback: a fallback that reads `pending?` can miss the next
+  failure (Solid #5039, open).
 
 ## 3. Writing to the server: an action
 
@@ -142,7 +156,8 @@ export action rename(id: number, title: string, i: number) {    // i: the row's 
   id it is inert (no controls, since the server doesn't know it yet) and the re-ask replaces it; a client id the
   server keeps lets the placeholder be the row.
 - **When the server answers a kind of row in several fetches** (one list per status, per folder, per page), each fetch
-  is its own keyed store, row for row in the server's order, so a row shows once. A move guesses the list it leaves
+  is its own keyed store, row for row in the server's order, so a row shows once. Each list's pane has its own
+  `loading` value and `errored` region (sections 1 and 2), so no fetch holds or fails another. A move guesses the list it leaves
   and the list it joins. On accept, re-ask **every list the row can be in**, not only the two the handler saw: another
   write of the same row may have been answered first and moved it elsewhere. Don't work out which list holds it now
   from the screen (`latest`): a list that hasn't answered yet has no value to read, and the read throws.
@@ -242,8 +257,8 @@ a value; an effect is for sending a value somewhere else (a parent's `on…` han
   settled, against what is on screen, and its writes are a new change of their own.
 - **Loading inputs**: an input that is loading (a first load, or a re-ask after its inputs changed) is pending, and
   the block does not run until the answer lands (R-2). The effect doesn't hold the screen while it waits.
-- **Failing inputs**: give an input that can fail a `catch` (`effect (x catch (e) => fallback) { … }`), so the block
-  gets a plain value it can test for.
+- **Failing inputs**: an input that fails reaches the block as its error value (H-12). An effect that should act
+  only on answers reads a value that cannot fail (an `await … catch` answer, or a count of what the view shows).
 - **Guesses**: an input computed from a `guess` write fires as soon as the guess shows, and again with the old
   value if the guess reverts (EF-2). It doesn't wait for the action to end.
 - **Lifetime**: an effect lives as long as its component. When the component goes away the effect stops, and its

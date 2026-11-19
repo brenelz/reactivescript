@@ -82,7 +82,7 @@ export default component Profile() {
 Leave out the `errored` boundary and it does not compile:
 
 ```
-profile.rx:10: error UNHANDLED_FAILURE [R-f-5] a reader of user.name (in <Profile>) can fail with Error and no catch or errored boundary above it discharges Error — wrap it in `errored fallback(e) { … } { … }`, or catch it: `… catch (e) => …`
+profile.rx:10: error UNHANDLED_FAILURE [R-f-5] a reader of user.name (in <Profile>) can fail with Error and no catch or errored boundary above it discharges Error — show it where it is read: `errored fallback(e) { … } { … }` around the reader (or `await … catch (e) => …` at the await, to make the rejection an answer)
 ```
 
 Beyond this the language has structured stores with per-path writes

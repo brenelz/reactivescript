@@ -128,7 +128,7 @@ Added:
 | `use name` | the nearest provision above (a unary form: `(use x) == y`) | RG-7 |
 | `type T = …` | a TS type declaration, kept as text | — |
 | `throw e` | a failure, in either scope: `x > 0 ? x : throw BadInput(x)` (TC39's throw expression) | R-f-3 |
-| `e catch (x: A \| B) => alt` | `alt` when `e` fails with `A` or `B`; `catch (x) =>` takes every class; looser than `?:` | R-f-4 |
+| `await e catch (x: A \| B) => alt` | `alt` is the answer when the promise rejects with `A` or `B`; `catch (x) =>` takes every class; only after an `await` (`CATCH_NOT_ON_AWAIT`) | R-f-4 |
 
 `await` may appear anywhere in an expression of reactive scope — an
 equation, a reader `{…}`, an attribute or prop, an `if` condition, a `for`

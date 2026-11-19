@@ -2199,6 +2199,13 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Throw(x) => self.expr(x, env, ctx, None),
             ExprKind::Catch { e: inner, name, classes, alt } => {
+                if !matches!(&inner.k, ExprKind::Await { .. }) {
+                    self.err(
+                        "CATCH_NOT_ON_AWAIT",
+                        "R-f-4",
+                        format!("`{} catch …`: a catch follows an `await` — its rejection becomes an answer. A failure read from a value belongs to its own section: show it under `errored fallback(e) {{ … }} {{ … }}` where it is read", show(inner)),
+                    );
+                }
                 self.expr(inner, env, ctx, None);
                 if let Some(cs) = classes {
                     for n in cs {
@@ -3203,7 +3210,7 @@ impl<'a> Checker<'a> {
                         if need_hold { "sees no value" } else { "throws its error" },
                         n,
                         n,
-                        if need_catch { format!(", or catch the failure (`… catch (e) => …`)") } else { String::new() }
+                        if need_catch { format!(", or read it inside `try {{ … }} catch (e) {{ … }}`") } else { String::new() }
                     ),
                 );
             }
@@ -4058,8 +4065,8 @@ impl<'a> Checker<'a> {
                 "UNHANDLED_FAILURE",
                 "R-f-5",
                 format!(
-                    "a reader of {} can fail with {} and no catch or errored boundary above it discharges {} — wrap it in `errored fallback(e{}) {{ … }} {{ … }}`, or catch it: `… catch (e{}) => …`",
-                    it.what, it.cls, it.cls, suffix, suffix
+                    "a reader of {} can fail with {} and no catch or errored boundary above it discharges {} — show it where it is read: `errored fallback(e{}) {{ … }} {{ … }}` around the reader (or `await … catch (e) => …` at the await, to make the rejection an answer)",
+                    it.what, it.cls, it.cls, suffix
                 ),
             );
         }

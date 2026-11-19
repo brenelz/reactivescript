@@ -771,8 +771,8 @@ export default component App() {
 
 ### UNHANDLED_FAILURE
 
-A value that can fail is read where nothing handles the failure (R-f-5). Wrap the reader in an `errored` region, or
-catch the failure where it is read, `e catch (err) => alt`.
+A value that can fail is read where nothing handles the failure (R-f-5). Wrap the reader in an `errored` region where
+it is read. To make a rejection an answer instead, catch it at the `await`: `await f(x) catch (err) => alt`.
 
 ```rx before
 export default component App() {
@@ -787,6 +787,28 @@ export default component App() {
   source id := 1
   user = await fetch("u:" + id)
   {errored fallback(e) { <p>failed: {e.message}</p> } { <p>{user}</p> }}
+}
+```
+
+### CATCH_NOT_ON_AWAIT
+
+A `catch` follows something other than an `await` (R-f-4). A value that failed is shown where it is read, by an
+`errored` region around its readers; a `catch` belongs on the `await`, where it makes the rejection the answer. A rule
+the user breaks is a value (`""` or a message), not a failure.
+
+```rx before
+export default component App() {
+  source id := 1
+  user = await fetch("u:" + id)
+  <p>{user catch (e) => "unknown"}</p>
+}
+```
+
+```rx after
+export default component App() {
+  source id := 1
+  user = await fetch("u:" + id)
+  {errored fallback(e) { <p>unknown</p> } { <p>{user}</p> }}
 }
 ```
 
@@ -855,7 +877,7 @@ export default component App() {
 
 A handler reads a value as a snapshot when it can have no value yet (a first load) or can fail, so the click sees no
 value or throws (R-8). Put the element inside the `loading` / `errored` regions whose content reads the value, with
-`disabled={pending? x}` while a new question is out; or catch the failure in the handler. The region must read the
+`disabled={pending? x}` while a new question is out; or read it in the handler inside `try { … } catch (e) { … }`. The region must read the
 value itself, not only `pending? x`: a probe takes no failure, so a region that reads `x` only through `pending?` stays
 on its content when `x` fails, and the click throws.
 

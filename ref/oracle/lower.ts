@@ -320,6 +320,13 @@ export class Oracle {
           }
           const fnDecl = this.fnOf(d.e, scope);
           if (fnDecl && (fnDecl.params.some(p => p.ref) || fnDecl.decls.length > 0)) { scope.vars.set(d.name, { k: "memo", get: this.instantiateFn(d.e as Extract<Expr, { k: "call" }>, fnDecl, scope) }); break; }   // RG-6
+          if (d.e.k === "catch" && d.e.e.k === "await" && !d.deferred) {   // R-f-4 over a tail await: a matching rejection is the answer, where it is awaited (as the compiled `settle`)
+            const c = d.e; const classes = this.classValues(c.classes, scope); const compute = this.computeOf(d.name, c.e, scope) as (p: unknown) => unknown;
+            const alt = (err: unknown) => { const en = new Map<string, unknown>(); if (c.name) en.set(c.name, err); return untrack(() => this.ev(c.alt, scope, en)); };
+            const get = createMemo(((prev: unknown) => { const r0 = compute(prev); const r = r0 instanceof Flight ? r0.first : r0; return r instanceof Promise ? r.then(v => v, err => { if (isA(err, classes)) return alt(err); throw err; }) : r; }) as any, this.loadingValue(c.e, scope) as any);
+            scope.vars.set(d.name, { k: "memo", get });
+            break;
+          }
           if (d.e.k === "catch" && !d.deferred) {                      // R-f-4 over a tail await: the equation's flight is an inner memo, read through a boundary
             const c = d.e; const classes = this.classValues(c.classes, scope);
             const inner = createMemo(this.computeOf(d.name, c.e, scope) as any, this.loadingValue(c.e, scope) as any);

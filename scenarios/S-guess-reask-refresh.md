@@ -40,7 +40,7 @@ effect's view too.
 export default component App() {
   source detail = await fetch("d")
   action rename(t) { try { guess detail.title := t; await fetch("save"); refresh detail } catch (e) {} }
-  effect (detail.title catch (e) => "err") { log($0) }
+  effect (detail.title) { log($0) }
   <p>x</p>
 }
 ```

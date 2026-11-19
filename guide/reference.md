@@ -30,7 +30,7 @@ Stmt      ::= Target ":=" Expr | "guess" Target ":=" Expr | "refresh" Name | "af
             | "if" "(" Expr ")" … ("else" …)? | "try" … "catch" … "finally" … | "throw" Expr | "return" Expr? | Expr
 Expr      ::= TypeScript's, without assignment, `this`, `function`, `new` on reactive values
             | "await" Expr | "pending?" Expr | "latest" Expr | "peek" "(" Expr ")" | "use" Name
-            | Expr "catch" ("(" Name (":" Classes)? ")")? "=>" Expr   -- the loosest form: parenthesise to catch one arm
+            | "await" Expr "catch" ("(" Name (":" Classes)? ")")? "=>" Expr   -- only after an await (CATCH_NOT_ON_AWAIT)
             | "throw" Expr
 ```
 
@@ -88,12 +88,15 @@ Expr      ::= TypeScript's, without assignment, `this`, `function`, `new` on rea
 ## Failures
 
 - A rejected `await` is an error value: it flows through every equation and prop that reads it (R-6).
-- Every reader of a value that can fail needs an `errored` region above it or a `catch` on the read
-  (UNHANDLED_FAILURE, R-f-5). `errored fallback(e: NotFound) { … }` takes only that class (R-f-4).
+- Every reader of a value that can fail needs an `errored` region above it (UNHANDLED_FAILURE, R-f-5).
+  `errored fallback(e: NotFound) { … }` takes only that class (R-f-4).
+- `catch` follows an `await` only: `await f(x) catch (e) => alt` makes a matching rejection the answer
+  (CATCH_NOT_ON_AWAIT, R-f-4). A handler or action that reads a value which can fail uses `try`/`catch`.
 - An error stays on screen until a new answer replaces it: `refresh x` (quiet) retries; changing an input asks a new
   question (H-12, D-41).
-- A value borrowed from another section (a list passed into a detail) carries that section's failures: catch the
-  read, or the other section's error shows in this one.
+- A value borrowed from another section (a list passed into a detail) carries that section's failures: put its
+  readers in an `errored` region of their own, or the other section's error shows in this one.
+- Handlers read only their own pane's data, and pass it on as plain values.
 - `throw NotFound(id)` in an equation's arm is a failure value: `found(it, id) => it == null ? throw NotFound(id) : it`.
 
 ## Collections

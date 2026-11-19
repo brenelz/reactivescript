@@ -1,31 +1,32 @@
-# S-catch-snapshot — a `catch` read in a `fn` called from a handler is a snapshot: the committed value while a question is out
+# S-catch-snapshot — a read in a handler is a snapshot: the committed value while a question is out, and a failure it can catch
 
-Rules exercised: R-8, R-f-4, R-f-7, AC-4.
+Rules exercised: R-8, R-f-4, R-f-6, R-f-7, AC-4, AC-7.
 
 ## Program
 
 ```rx
 export default component App() {
   source ans = await fetch("a") -> 0
-  fn cur() => ans catch (e) => -1
   source seen := 0
   action reload() { try { await fetch("save"); refresh ans } catch (e) {} }
-  action note(d: number) { seen := cur() + d }
-  <p>{ans catch (e) => "err"} seen {seen}</p>
+  action note(d: number) { try { seen := ans + d } catch (e) { seen := -1 } }
+  errored fallback { <p>err seen {seen}</p> } { <p>{ans} seen {seen}</p> }
 }
 ```
 
-`cur` is written once and read from two scopes. Called from an action (or
-any handler) it is imperative scope, where every read is a snapshot (R-8): an equation with a
-new question out reads its committed value, and a matching failure is the
-`catch`'s alternative (R-f-4, R-f-7). Instant 4: the action's `refresh` is
-out, and `note`'s `cur()` reads `2`, what the screen shows. Instant 6:
-the answer failed, so the snapshot takes the `catch` and reads `-1`.
+In an action (or any handler) every read is a snapshot (R-8): an equation
+with a new question out reads its committed value, and a failed one throws
+its failure there (R-f-7), which the action catches (R-f-6, AC-7). Instant
+4: the action's `refresh` is out, and `note`'s read of `ans` is `2`, what
+the screen shows. Instant 6: the answer failed, so the read throws and the
+handler's `catch` writes `-1`.
 
 Found by the eval board (r15prep, `catch-read-in-handler-during-refresh.rx`):
-the compiled `catch` built a fresh error boundary at each read, which in a
+the compiled read built a fresh error boundary at each read, which in a
 handler had no committed value while the refresh was out, so the click
-threw `NotReadyError` and was lost.
+threw `NotReadyError` and was lost. Since 2026-11-19 a `catch` follows only
+an `await` (R-f-4); the rejected variant below was this scenario's first
+program.
 
 ## Frames
 
@@ -39,3 +40,19 @@ threw `NotReadyError` and was lost.
 | 5 | handler `note(1)` | `2 seen 3` |
 | 6 | reject ans "down" | `err seen 3` |
 | 7 | handler `note(0)` | `err seen -1` |
+
+## Rejected variants
+
+```rx
+-- reject: CATCH_NOT_ON_AWAIT
+export default component App() {
+  source ans = await fetch("a") -> 0
+  fn cur() => ans catch (e) => -1
+  source seen := 0
+  action note(d: number) { seen := cur() + d }
+  errored fallback { <p>err</p> } { <p>{ans} seen {seen}</p> }
+}
+```
+
+R-f-4: a `catch` follows an `await`. A handler that reads a failed value
+catches it in its own `try`.

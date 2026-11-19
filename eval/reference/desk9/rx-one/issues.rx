@@ -65,12 +65,12 @@ export component IssuesPage(props: { onOpenCount: (n: number) => void; onOpenHel
           }}
           <button data-testid="retry" onClick={() => { refreshDetail() }}>retry</button>
         }}
-        <button data-testid="assign" onClick={() => { assignTo(selected, user, false, indexOf(rows, selected) catch (e) => -1) }}>assign to {user}</button>
+        <button data-testid="assign" onClick={() => { try { assignTo(selected, user, false, indexOf(rows, selected)) } catch (e) { assignTo(selected, user, false, -1) } }}>assign to {user}</button>
         {if assignError != "" {
           <p data-testid="assign-error">{assignError}</p>
         }}
         <input data-testid="title-input" value={titleInput} onInput={e => { titleInput := e.target.value }} />
-        <button data-testid="rename" onClick={() => { if (titleInput != "") { renameTo(selected, titleInput, indexOf(rows, selected) catch (e) => -1) } }}>rename</button>
+        <button data-testid="rename" onClick={() => { if (titleInput != "") { try { renameTo(selected, titleInput, indexOf(rows, selected)) } catch (e) { renameTo(selected, titleInput, -1) } } }}>rename</button>
         {if renameError != "" {
           <p>rename error: {renameError}</p>
         }}

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+**Changed**
+
+- `catch` follows only an `await`: `await f(x) catch (e) => alt` makes a matching rejection the answer. A `catch` after
+  anything else is the new compile error `CATCH_NOT_ON_AWAIT` (R-f-4). Show a failed value with an `errored` region
+  where it is read; in a handler or action, read it inside `try { … } catch (e) { … }`; write validation as a value
+  (`""` or a message), not a thrown class.
+
 **Fixed**
 
 - `affects` on a keyed or structured source that takes a guess threw `INVALID_AFFECTS_TARGET` in a dev build, so the

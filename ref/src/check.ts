@@ -866,6 +866,7 @@ class Checker {
       }
       case "throw": go(e.e); return;
       case "catch": {
+        if (e.e.k !== "await") this.err("CATCH_NOT_ON_AWAIT", "R-f-4", `\`${show(e.e)} catch …\`: a catch follows an \`await\` — its rejection becomes an answer. A failure read from a value belongs to its own section: show it under \`errored fallback(e) { … } { … }\` where it is read`);
         go(e.e); if (e.classes) for (const n of e.classes) this.errClass(n, env);
         const inner = new Env(env, env.region); if (e.name) inner.vars.set(e.name, { kind: "value", name: e.name, region: env.region, line: this.line });
         this.expr(e.alt, inner, ctx); return;
@@ -1430,7 +1431,7 @@ class Checker {
       const res = { fails, reqs }; escBusy.delete(C); escMemo.set(C, res); return res;
     };
     const top = esc(null);
-    for (const it of top.fails) { this.line = it.line; this.err("UNHANDLED_FAILURE", "R-f-5", `a reader of ${it.what} can fail with ${it.cls} and no catch or errored boundary above it discharges ${it.cls} — wrap it in \`errored fallback(e${it.cls === "Error" ? "" : `: ${it.cls}`}) { … } { … }\`, or catch it: \`… catch (e${it.cls === "Error" ? "" : `: ${it.cls}`}) => …\``); }
+    for (const it of top.fails) { this.line = it.line; this.err("UNHANDLED_FAILURE", "R-f-5", `a reader of ${it.what} can fail with ${it.cls} and no catch or errored boundary above it discharges ${it.cls} — show it where it is read: \`errored fallback(e${it.cls === "Error" ? "" : `: ${it.cls}`}) { … } { … }\` around the reader (or \`await … catch (e) => …\` at the await, to make the rejection an answer)`); }
     for (const it of top.reqs) { this.line = it.line; if (it.name === HOLD) { this.err("CLIENT_QUESTION_UNHELD", "SV-7b", `${it.what} awaits \`client\` JS, and no \`loading\` region above it holds it on any path that renders it: the server never asks a client question, so it could never finish this page — put the reader under \`loading fallback { … } { … }\`, or give the await a first paint (\`await f() -> v\`)`); continue; } this.err("CONTEXT_NOT_FOUND", "RG-7b", `${it.what}: no provision of ${keyName(it.name)} (declared in ${it.name.split("#")[0].split("/").pop()}) above this region on any path that renders it`); }
     for (const a of actF) if (a.f.cls.size) { this.line = a.line; this.err("UNCAUGHT_ACTION_FAILURE", "R-f-6", `action ${a.name} can fail with ${[...a.f.cls].join(", ")} and does not catch it: a handler cannot (it does not await the action) — \`try { … } catch (e) { … }\` in the body`); }
     // MO-3: the summaries an importing module checks against
