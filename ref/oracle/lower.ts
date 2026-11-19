@@ -346,7 +346,7 @@ export class Oracle {
           let last: unknown[] | null = null;
           createEffect(() => inputs.map(e => { const v = this.ev(e, scope); return v !== null && typeof v === "object" && (v as any)[$TARGET] !== undefined ? readCopy(v) : v; }), {   // a store enters whole, as a snapshot
             effect: (vals: unknown[]) => { if (last && last.length === vals.length && vals.every((v, i) => sameInput(v, last![i]))) return; last = vals; return apply(vals); },   // EF-3: fires when an input changed (an error in between is a change)
-            error: () => { last = null; return apply(inputs.map(() => ERR)); },   // E-12: an error is an answer the apply receives
+            error: () => { last = null; },   // EF-2a: a failed input doesn't fire the apply; the next answer does
           } as any);
           break;
         }

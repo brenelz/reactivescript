@@ -58,6 +58,10 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
 
 ## 2. Failures: a region where they're read
 
+There are two kinds of failure, and each has one home. A **read** that failed (the server's answer couldn't be
+loaded) is shown by an `errored` region where it's read; nothing else handles it. A **write** that failed is the
+client's own state: a plain source the action's `catch` writes, shown beside the thing it failed on (section 3).
+
 - `errored fallback(e) { <p>failed: {e.message}</p> } { … }` shows a failure in place of the content under it.
   Give each pane its own, so one pane's failure never touches another.
 - **A failure is shown where it's read.** A value that failed is failed for every reader, and derivations over it are
@@ -214,7 +218,10 @@ is:
   inputs: declared in the page's component, asked when the page opens, gone when it closes. Opening the page again
   starts it as the app starts. A write still out when its page closes changes nothing on the next visit: the page
   asks the server again.
-- **The screen.** What copies what is shown lives where it is shown, inside the region that shows it.
+- **The screen.** What copies what is shown lives where it is shown, inside the region that shows it. A store a
+  write guesses on is not screen state: a write can outlive the region it was made in (select another item and come
+  back), so the store and its guesses live with the page, keyed by what they belong to, not in a region rebuilt on
+  each selection.
 
 So a page's lists and their actions are declared in the page component, not in a module, and a page that is not
 open asks nothing. Don't move a page's data to a module with a counter that reloads it on each visit: the inputs,
@@ -263,8 +270,8 @@ a value; an effect is for sending a value somewhere else (a parent's `on…` han
   settled, against what is on screen, and its writes are a new change of their own.
 - **Loading inputs**: an input that is loading (a first load, or a re-ask after its inputs changed) is pending, and
   the block does not run until the answer lands (R-2). The effect doesn't hold the screen while it waits.
-- **Failing inputs**: an input that fails reaches the block as its error value (H-12). An effect that should act
-  only on answers reads a value that cannot fail (an `await … catch` answer, or a count of what the view shows).
+- **Failing inputs**: while an input has failed, the block doesn't run (EF-2a). The failure shows in the region that
+  reads it, not in the effect. The next answer runs the block again.
 - **Guesses**: an input computed from a `guess` write fires as soon as the guess shows, and again with the old
   value if the guess reverts (EF-2). It doesn't wait for the action to end.
 - **Lifetime**: an effect lives as long as its component. When the component goes away the effect stops, and its

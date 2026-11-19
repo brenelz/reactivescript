@@ -273,6 +273,12 @@ Function application `f(e…)` covers both language functions and FFI imports;
   has settled (§4). An `eᵢ` that derives from a guess or a lane value
   (H-7, H-11) fires with the lane's reveal — now, not at the hold's commit —
   and again when the guess reverts (S-ai-feed instant 4; both runners).
+- **EF-2a (A failure doesn't fire).** [2026-11-19, from Ryan's rule that a failure
+  is shown where it's read] An instant in which some `eᵢ` is an error (E-12) does
+  not run `B`: the failure is shown by the region that reads it (R-f-5), and an
+  apply has nothing to show it with. The next instant in which every `eᵢ` has a
+  value runs `B`, even if the values equal the last ones it received. Lowered as
+  Solid's `createEffect` with an `error` arm that only forgets the last value.
 - **EF-3 (Once, completely).** `B` runs at most once per instant and is never
   interrupted by that instant's settling; its writes begin a new instant.
 - **EF-4 (No inputs).** `effect () B` runs once, in the instant the effect is

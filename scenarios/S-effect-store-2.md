@@ -12,8 +12,8 @@ export default component App() {
 }
 ```
 
-A failed answer reaches the apply as an error value (instant 3, H-12; logged `#error`). The next answer
-(instant 5) is a store again, with different contents, and the apply runs with it.
+A failed answer doesn't fire the apply (instant 3, EF-2a): the failure shows in the region that reads it. The next
+answer (instant 5) is a store again, and the apply runs with it.
 
 ## Frames
 
@@ -22,7 +22,7 @@ A failed answer reaches the apply as an error value (instant 3, H-12; logged `#e
 | 0 | mount | `loading` | |
 | 1 | resolve "l" [{"id":1},{"id":3},{"id":4}] | `3` | `log([{"id":1},{"id":3},{"id":4}])` |
 | 2 | handler `refresh rows` | `3` | |
-| 3 | reject "l" "down" | `error` | `log(#error)` |
+| 3 | reject "l" "down" | `error` | |
 | 4 | handler `refresh rows` | `error` | |
 | 5 | resolve "l" [{"id":1},{"id":4}] | `2` | `log([{"id":1},{"id":4}])` |
 
@@ -31,12 +31,13 @@ Found by the timing fuzzer (round 10, r7-chain3-rx-2 seed 27): an app reported t
 screen at rest. The `catch` lowered to an error boundary around the read, and the read of a store returned the store
 without reading any of its keys, so once the boundary had caught the failure nothing it tracked changed again. An
 effect input that is a store now enters whole, as a snapshot (S-effect-store-1); since 2026-11-19 a `catch` follows
-only an `await` (R-f-4), and the apply receives the failure itself.
+only an `await` (R-f-4). Since then the apply also skips a failure (EF-2a, 2026-11-19: an app copying a list's
+ids into a source wrote the error value there and crashed on `ids.indexOf`); the next answer fires it.
 
 ## Variant: the first answer fails
 
 | instant | action | frame | effect |
 | ------- | ------ | ----- | ------ |
-| 1 | reject "l" "down" | `error` | `log(#error)` |
+| 1 | reject "l" "down" | `error` | |
 | 2 | handler `refresh rows` | `error` | |
 | 3 | resolve "l" [{"id":1},{"id":4}] | `2` | `log([{"id":1},{"id":4}])` |
