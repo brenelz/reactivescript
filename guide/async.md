@@ -76,8 +76,6 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
 - An answer that means "missing" (`null`) is a failure you declare: `export error NotFound(id: number) => …`, and
   `found(await fetchUser(id), id)` with `fn found(it, id) => it == null ? throw NotFound(id) : it`.
 - Retry is `refresh x`. It is quiet (AC-4): the failure stays on screen until the new answer replaces it (H-12).
-  Show the retry's progress in the content, not the fallback: a fallback that reads `pending?` can miss the next
-  failure (Solid #5039, open).
 
 ## 3. Writing to the server: an action
 
