@@ -174,29 +174,49 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
 
     // ---- declarations ----
     /** `source x := e`: atomic → a signal; structured → a store behind a signal slot, so the root can be replaced (ST-1, ST-2a). */
-    source(name: string, init: unknown): [Acc, Writer] {
+    /** With a guess written to it (AC-3), the writable is the truth and an optimistic layer derives from it: plain writes
+     *  go to the truth, guesses to the layer, and each guess ends when its action's hold commits, showing the truth then. */
+    source(name: string, init: unknown, guessed = false): [Acc, Writer] {
       void name;
       if (typeof init === "object" && init !== null) {
         const [store, setStore] = createStore(init as any); const [get, set] = createSignal<unknown>(store);
         const w: Writer = {
           set: v => { if (typeof v === "function") { setStore(v as any); set(store); } else if (typeof v === "object" && v !== null) { setStore(() => v as any); set(store); } else set(v); },
-          path: (keys, v) => setStore((d: any) => { let o = d; for (const k of keys.slice(0, -1)) o = o[k]; o[keys[keys.length - 1]] = v; }),
-          guess: () => { throw new Error("GUESS_NO_QUESTION"); },
+          path: pathWrite(setStore),
+          guess: () => { throw new Error("a guess on a := source that the compiler did not mark as guessed"); },
         };
+        if (guessed) {                                                    // createOptimisticStore(() => truth) over createStore(v)
+          const [view, setView] = (createOptimisticStore as any)(() => get(), Array.isArray(init) ? [] : {});
+          const acc = () => view; storeAccs.add(acc);
+          return [acc, { ...w, guess: guessInto(setView) }];
+        }
         return [get, w];
       }
       const [get, set] = createSignal(init);
-      return [get, { set: set as (v: unknown) => void, path: () => { throw new Error("a path write to an atomic source"); }, guess: () => { throw new Error("GUESS_NO_QUESTION"); } }];
+      if (guessed) {                                                      // createOptimistic(() => truth()) over createSignal(v)
+        const [view, setGuess] = createOptimistic(() => get());
+        return [view as Acc, { set: set as (v: unknown) => void, path: () => { throw new Error("a path write to an atomic source"); }, guess: setGuess as any }];
+      }
+      return [get, { set: set as (v: unknown) => void, path: () => { throw new Error("a path write to an atomic source"); }, guess: () => { throw new Error("a guess on a := source that the compiler did not mark as guessed"); } }];
     },
     /** `source x = e` (ST-5): createSignal(fn); with a guess written to it, a createOptimistic layer over that truth (AC-3);
      *  written or probed by path, createStore(fn, {}) whose derive writes its draft. */
-    question(name: string, compute: (prev: unknown) => unknown, opts: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean; record?: boolean }, key?: string): [Acc, Writer] {
+    question(name: string, compute: (prev: unknown) => unknown, opts: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean; record?: boolean; plain?: boolean }, key?: string): [Acc, Writer] {
       const fn = named(name, compute);
+      const derive = (draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); return landDraft(draft, r, key); };
+      const seed = () => key && !mode.record ? [] : {};
+      if (mode.optimistic && mode.structured && mode.plain && !mode.derived) {   // AC-3 with plain writes too: createOptimisticStore(() => truth) over createStore(fn) — writes go to the truth, guesses to the layer
+        const [truth, setTruth] = (createStore as any)(derive, seed(), key ? { key } : undefined);
+        const tacc = () => truth; storeAccs.add(tacc);
+        const [view, setView] = (createOptimisticStore as any)(() => truth, seed(), key ? { key } : undefined);
+        const get = () => view; storeAccs.add(get); truthOf.set(get, tacc);   // AC-4: `refresh x` re-asks the truth
+        return [get, { set: v => setTruth((d: any) => typeof v === "function" ? (v as (x: unknown) => unknown)(d) : v), path: pathWrite(setTruth), guess: guessInto(setView) }];
+      }
       if (mode.optimistic && mode.structured) {                        // AC-3 path targets: createOptimisticStore(fn, seed) — the derive writes its draft; the setter guesses per key
-        const [store, setStore] = (createOptimisticStore as any)((draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); return landDraft(draft, r, key); }, key && !mode.record ? [] : {}, key ? { key } : undefined);
+        const [store, setStore] = (createOptimisticStore as any)(derive, seed(), key ? { key } : undefined);
         const get = () => store; storeAccs.add(get);
-        const plain = () => { throw new Error("a plain write to an optimistic store is not lowered yet"); };
-        return [get, { set: plain, path: plain, guess: (v, keys = []) => setStore((d: any) => { if (keys.length === 0) return typeof v === "function" ? (v as (x: unknown) => unknown)(d) : v; /* a whole guess is the setter\'s return, which Solid diffs shallowly against the view as guesses */ let o = d; for (const k of keys.slice(0, -1)) o = o[k]; const last = keys[keys.length - 1]; o[last] = typeof v === "function" ? (v as (x: unknown) => unknown)(o[last]) : v; }) }];
+        const plain = () => { throw new Error("a plain write to an equation"); };
+        return [get, { set: plain, path: plain, guess: guessInto(setStore) }];
       }
       if (mode.optimistic && mode.derived) {                             // AC-3 over an equation: createOptimistic(fn), whose setter only guesses
         const plain = () => { throw new Error("a plain write to an equation"); };
@@ -331,6 +351,12 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
   return app;
 }
 export type App = ReturnType<typeof createApp>;
+
+/** A path write `x.a.b := v` as a store setter's mutation. */
+const pathWrite = (setStore: (f: (d: any) => unknown) => void) => (keys: (string | number)[], v: unknown) => setStore((d: any) => { let o = d; for (const k of keys.slice(0, -1)) o = o[k]; o[keys[keys.length - 1]] = v; });
+/** A guess through an optimistic store's setter: per key, or whole — a whole guess is the setter's return, which Solid
+ *  diffs shallowly against the view as guesses. */
+const guessInto = (setStore: (f: (d: any) => unknown) => void) => (v: unknown, keys: (string | number)[] = []) => setStore((d: any) => { if (keys.length === 0) return typeof v === "function" ? (v as (x: unknown) => unknown)(d) : v; let o = d; for (const k of keys.slice(0, -1)) o = o[k]; const last = keys[keys.length - 1]; o[last] = typeof v === "function" ? (v as (x: unknown) => unknown)(o[last]) : v; });
 
 /** A keyed answer is returned from the derive, and Solid reconciles it by key at any depth (ST-4a): a row whose key is
  *  still there keeps its object and takes the new leaves, so an equal answer changes nothing (#51, #64). Any other

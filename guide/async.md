@@ -113,7 +113,7 @@ by what the screen should do:
 
 | You want | Write |
 | --- | --- |
-| Show a value now, and take it back if the action fails | `guess x := v` (x is an equation, `x = …`, or a source with a question, `source x = …`) |
+| Show a value now, and take it back if the action fails | `guess x := v` (x is a source or an equation) |
 | `pending? x` true while the action runs | `affects x` |
 | Land a UI write now and keep it (close a menu, clear a message) | `onFlush(() => { x := v })` (EF-8) |
 | Record the server's answer | `x := answer` after the `await` |
@@ -175,8 +175,7 @@ export action rename(id: number, title: string, i: number) {    // i: the row's 
 - **After the `await`, take only what is the server's.** A plain write into an answer after the server answered
   takes its answer and the answer's own value at the write (`x := rs => …`, rows found by id), never a row the handler
   saw or one read from another source: by then it may have changed, or be held with this write. Pass actions plain
-  values (ids, titles, indexes), not rows. The compiler flags the rest (`STALE_CAPTURE`, AC-1g). A plain write to a
-  store that is also guessed by path is not supported yet: re-ask it instead.
+  values (ids, titles, indexes), not rows. The compiler flags the rest (`STALE_CAPTURE`, AC-1g).
 - **A failure is the client's, not a guess.** A guess reverts when its action ends; a failure must outlast it, so it
   is a plain source, and a successful retry removes it.
 - **Generate ids on the client** in the handler, before calling the action, so a declined add can be shown again

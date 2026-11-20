@@ -98,7 +98,7 @@ struct Usage {
     optimistic: HashSet<String>,
     paths: HashSet<String>,
     prev_of: HashSet<String>,
-    /// plain writes (not guesses): a question source that is guessed by path and written plainly is not lowered yet
+    /// plain writes (not guesses): a question source that is guessed by path and written plainly lowers to a layer over a writable truth
     plain: HashSet<String>,
 }
 fn usage(programs: &[&Program], extra: &[Vec<Stmt>]) -> Usage {
@@ -1020,16 +1020,17 @@ impl<'p> Gen<'p> {
         match d {
             Decl::Source { name, init, question: false, .. } => {
                 let x = self.expr(init, env, &reactive())?;
-                let mut out = vec![S::Const(pair(), rtc("source", vec![str(name.clone()), rtc("untrack", vec![thunk(x)])])), self.reg(name, b, true)];
+                let mut args = vec![str(name.clone()), rtc("untrack", vec![thunk(x)])];
+                if self.u.optimistic.contains(name) {
+                    args.push(E::Bool(true)); // AC-3: a guess over a writable — an optimistic layer derived from it
+                }
+                let mut out = vec![S::Const(pair(), rtc("source", args)), self.reg(name, b, true)];
                 prev(&mut out);
                 Ok(out)
             }
             Decl::Source { name, init, key, .. } => {
-                if self.u.optimistic.contains(name) && self.u.paths.contains(name) && self.u.plain.contains(name) {
-                    return fail(format!("a plain write to {name}, a source with a question that is also guessed by path, is not lowered yet (06 AC-3): guess the server's answer after the `await` instead (`guess {name} := rs => …`, until the re-ask lands), or guess {name} whole (`guess {name} := rs => …`) rather than by path"));
-                }
                 let lv = self.loading_value(init, env)?;
-                let mode = obj(vec![("optimistic", E::Bool(self.u.optimistic.contains(name))), ("structured", E::Bool(self.u.paths.contains(name))), ("record", E::Bool(matches!(init.k, ExprKind::Rec(_))))]);
+                let mode = obj(vec![("optimistic", E::Bool(self.u.optimistic.contains(name))), ("structured", E::Bool(self.u.paths.contains(name))), ("record", E::Bool(matches!(init.k, ExprKind::Rec(_)))), ("plain", E::Bool(self.u.plain.contains(name)))]);
                 let x = self.expr(init, env, &Ctx { tail: true, self_: Some(name.clone()), ..Ctx::default() })?;
                 let mut args = vec![str(name.clone()), arrow(&["__prev"], x), lv, mode];
                 if let Some(k) = key {

@@ -25,7 +25,7 @@ does (`export action select(id) { selected := id }`, or an action passed as a pr
 
 ```rx
 source count: number := 0                  // state; written only with `:=` in imperative code
-source user = await fetchUser(id)          // state with a question: re-asked when `id` changes, can take a guess
+source user = await fetchUser(id)          // state with a question: re-asked when `id` changes
 double = count * 2                         // an equation: always equal to its right side, never written
 label = `${user.name} (${count})`
 rows key id = items                        // a keyed collection (rows keep identity by `id`)

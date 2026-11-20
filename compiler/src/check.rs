@@ -2513,15 +2513,6 @@ impl<'a> Checker<'a> {
                         if !ctx.in_action {
                             self.err("GUESS_OUTSIDE_HOLD", "AC-3", "a guess outside an action: it needs a hold to live in — an apply block is never an action (its return is the cleanup, EF-5): declare one, `action save(v) { guess … }`, and call it from the block".into());
                         }
-                        if let Some(t) = tsym {
-                            if self.syms[t].kind == SymKind::Source && !self.syms[t].question {
-                                self.err(
-                                    "GUESS_NO_QUESTION",
-                                    "AC-3",
-                                    format!("{} is declared with := — a guess needs a question to confirm it (source {} = …, ST-5c)", target.name, target.name),
-                                );
-                            }
-                        }
                     }
                     for p in &target.path {
                         if let PathSeg::Expr(x) = p {

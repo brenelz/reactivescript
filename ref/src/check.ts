@@ -981,7 +981,6 @@ class Checker {
           }
           if (s.k === "optimistic") {
             if (!ctx.inAction) this.err("GUESS_OUTSIDE_HOLD", "AC-3", "a guess outside an action: it needs a hold to live in — an apply block is never an action (its return is the cleanup, EF-5): declare one, `action save(v) { guess … }`, and call it from the block");
-            if (target && target.kind === "source" && !target.question) this.err("GUESS_NO_QUESTION", "AC-3", `${s.target.name} is declared with := — a guess needs a question to confirm it (source ${s.target.name} = …, ST-5c)`);
           }
           s.target.path.forEach(p => typeof p !== "string" && this.expr(p, env, ctx));
           this.expr(s.e, env, ctx);

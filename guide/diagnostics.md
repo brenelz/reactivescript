@@ -493,28 +493,6 @@ export default component App() {
 }
 ```
 
-### GUESS_NO_QUESTION
-
-A guess is confirmed or replaced by the answer to a question, so `guess` writes an equation or a source declared
-with `=` (a source with a question, ST-5c). A source seeded with `:=` has no question; write it plainly, or with
-`onFlush` if it is a reset that should land now (EF-8).
-
-```rx before
-export default component App() {
-  source shown := "Ann"
-  action fix() { guess shown := "Zed"; await fetch("x") catch (e) => null }
-  <button onClick={() => { fix() }}>{shown}</button>
-}
-```
-
-```rx after
-export default component App() {
-  source shown = await fetch("name") catch (e) => "Ann"
-  action fix() { guess shown := "Zed"; await fetch("x") catch (e) => null }
-  <button onClick={() => { fix() }}>{shown}</button>
-}
-```
-
 ### GUESS_ON_DEFERRED
 
 A `deferred` equation is a lagging copy of another value (V-16), so nothing would confirm a guess on it. Guess the

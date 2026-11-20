@@ -335,10 +335,9 @@ class Gen {
     const pad = " ".repeat(ind * 2);
     const prev = b.prev ? `\n${pad}const ${b.prev} = __rt.pre(${b.js});` : "";
     if (d.k === "source") {
-      if (!d.question) return `${pad}const [${b.js}, ${b.w}] = __rt.source(${J(d.name)}, __rt.untrack(() => ${this.expr(d.init, env, { imp: false })}));\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
+      if (!d.question) return `${pad}const [${b.js}, ${b.w}] = __rt.source(${J(d.name)}, __rt.untrack(() => ${this.expr(d.init, env, { imp: false })})${this.u.optimistic.has(d.name) ? ", true" : ""});\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
       const lv = this.loadingValue(d.init, env);
-      if (this.u.optimistic.has(d.name) && this.u.paths.has(d.name) && this.u.plain.has(d.name)) throw new CompileError(`a plain write to ${d.name}, a source with a question that is also guessed by path, is not lowered yet (06 AC-3): guess the server's answer after the \`await\` instead (\`guess ${d.name} := rs => …\`, until the re-ask lands), or guess ${d.name} whole (\`guess ${d.name} := rs => …\`) rather than by path`);
-      const mode = `{ optimistic: ${this.u.optimistic.has(d.name)}, structured: ${this.u.paths.has(d.name)}, record: ${d.init.k === "rec"} }`;
+      const mode = `{ optimistic: ${this.u.optimistic.has(d.name)}, structured: ${this.u.paths.has(d.name)}, record: ${d.init.k === "rec"}, plain: ${this.u.plain.has(d.name)} }`;
       return `${pad}const [${b.js}, ${b.w}] = __rt.question(${J(d.name)}, (__prev) => ${this.expr(d.init, env, { imp: false, tail: true, self: d.name })}, ${lv}, ${mode}${d.key ? `, ${J(d.key)}` : ""});\n${pad}__rt.reg(${J(d.name)}, { get: ${b.js}, w: ${b.w} });${prev}`;
     }
     if (d.k !== "eq") throw new CompileError("unreachable");

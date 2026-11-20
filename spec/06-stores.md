@@ -87,9 +87,11 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   a `createOptimistic(() => truth())` layer.
 - **ST-5b.** Its question (V-9) is `e`'s inputs. `refresh x` re-asks it
   quietly; `affects x` declares that in-flight work will change it (H-9).
-- **ST-5c.** It and an equation (V-2) are the legal targets of `guess`
-  (AC-3): a guess needs a truth that will confirm or correct it, and an
-  equation's truth is its expression. A guess is not a write of the truth,
+- **ST-5c.** Any source, and an equation (V-2), are the legal targets of
+  `guess` (AC-3): a guess needs a truth that will confirm or correct it. An
+  equation's truth is its expression, a source's its question's answer and
+  its plain writes (since 2026-11-20; before, a `:=` source was
+  `GUESS_NO_QUESTION`). A guess is not a write of the truth,
   so an equation still takes no `:=` (W-1). A guessed equation lowers to
   Solid's `createOptimistic(fn)` / `createOptimisticStore(fn, seed)`, whose
   setter only guesses; a guessed source with a question to a
@@ -181,8 +183,8 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   so a later write in the body hides it and otherwise it lands late, and
   nothing in the text says so. The fix names what the write is for:
   ephemeral state that shows while the work runs ("saving", a spinner, a
-  pending row) is a guess, `guess x := v` on a source with a question
-  (ST-5c; often a constant one, `source status = ""`); a reset that lands
+  pending row) is a guess, `guess x := v` (ST-5c; on any source, `source
+  saving := false`); a reset that lands
   now and stays (clear an error, clear an input, close a menu) is
   `onFlush(() => { x := v })` (02 EF-8). A write meant to be held — a
   transition: `action go() { id := 2; await prefetch() }` (S-solid-20) — is
@@ -273,13 +275,15 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   the same inside and outside one.
 - **AC-3 (guess).** `guess x := e`, legal only inside an action
   body, declared or inferred (AC-1b); in an `effect`'s apply block, which
-  is never an action, it is `GUESS_OUTSIDE_HOLD`, and only on a source with a
-  question (ST-5) or on an equation (ST-5c; else `GUESS_NO_QUESTION`): writes a guess that is the
+  is never an action, it is `GUESS_OUTSIDE_HOLD`, and on a source or an
+  equation (ST-5c): writes a guess that is the
   graph's and the screen's value for `x` from the instant's settle,
   display-ahead and verdict-inert, until the hold it was made over commits
   or `x`'s own answer differs — the full rule is H-11. `x`'s truth is
   whatever its question gives: a constant (`source draft = "Ann"`), another
-  source (`source draft = name`, S-solid-32), or an `await`. Lowers to
+  source (`source draft = name`, S-solid-32), or an `await`; for a source
+  declared with `:=`, its plain writes (S-guess-writable-1, -2), which land
+  with the action's change, so the guess ends showing the action's own write. Lowers to
   `createOptimistic`/`createOptimisticStore` by usage. Path targets
   (`guess x.a := v`, `guess todos[i].done := true`) guess per key,
   as Solid's per-node override: the rest of `x` is the truth beneath the
@@ -292,10 +296,12 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   re-asked server list brings the row; a declined toggle's revert and its
   recorded failure land with that list, in one frame). Solid does the same:
   the action's transition holds until the refresh it started lands.
-  Lowers to `createOptimisticStore(fn, seed)`; a plain write to a source
-  that is also guessed by path is not lowered yet, and the compiler refuses
-  it (until 2026-11-17 it compiled and threw at run time, inside the
-  action's `catch`). A guess is verdict-inert: an
+  Lowers to `createOptimisticStore(fn, seed)`; a source that is guessed and
+  also written plainly lowers to an optimistic layer derived from its
+  writable truth: `createOptimistic(() => truth())` over `createSignal`, or
+  `createOptimisticStore(() => truth, seed)` over `createStore(v)` or
+  `createStore(fn, seed)` (S-guess-writable-3). Plain writes go to the truth
+  and guesses to the layer. A guess is verdict-inert: an
   action that wants `pending? x` true while its guess stands declares
   `affects x` (AC-5; the idiom is in 07 §5).
 - **AC-3a (A guess while its value loads a new question).** [taken by default
@@ -387,7 +393,7 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
 | `STALE_OWN_READ` (new)          | S   | AC-1d: a read of the change's own write          |
 | `STALE_WRITE_BACK` (new)        | S   | AC-1e: a pre-`await` read written back after it  |
 | `STALE_CAPTURE` (new)           | S   | AC-1g: after an `await`, an answer written with anything but the server's |
-| `GUESS_NO_QUESTION` (new)  | S   | AC-3 / ST-5c                                     |
+| `GUESS_NO_QUESTION` (retired 2026-11-20) | S | AC-3 / ST-5c: any source takes a guess |
 | `GUESS_ON_DEFERRED` (new)  | S   | AC-3 / ST-5c: a deferred equation lags its truth |
 | `GUESS_WHILE_LOADING` (new) | S | AC-3a: a guess a click can make while its value loads a new question (D-34) |
 

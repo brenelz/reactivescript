@@ -133,14 +133,16 @@ export function createApp(opts: { api?: Record<string, (...a: any[]) => unknown>
     lookup(name: string): Entry { const l = registry.get(name); if (!l?.length) { if (jsErrors.has(name)) return { value: jsErrors.get(name) }; throw new Error(`unbound ${name}`); } return l[l.length - 1]; },   // a server function's request has its module's error classes, not the page's registry
 
     // ---- declarations: the same primitives, from the server build. Writes do not happen on the server (SV-2). ----
-    source(name: string, init: unknown): [Acc, Writer] {
+    source(name: string, init: unknown, guessed = false): [Acc, Writer] {   // guessed: the client's optimistic layer over the writable (AC-3), so the owner trees (and hydration keys) match
       void name;
-      if (typeof init === "object" && init !== null) { const [store] = createStore(init as any); const [get] = createSignal<unknown>(store); return ro(get as Acc); }
-      const [get] = createSignal(init); return ro(get as Acc);
+      if (typeof init === "object" && init !== null) { const [store] = createStore(init as any); const [get] = createSignal<unknown>(store); if (guessed) { const [view] = (createOptimisticStore as any)(() => get(), Array.isArray(init) ? [] : {}); return ro(() => view); } return ro(get as Acc); }
+      const [get] = createSignal(init); if (guessed) { const [view] = createOptimistic(() => (get as Acc)()); return ro(view as Acc); } return ro(get as Acc);
     },
-    question(name: string, compute: (prev: unknown) => unknown, o: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean; record?: boolean }, key?: string): [Acc, Writer] {
+    question(name: string, compute: (prev: unknown) => unknown, o: { loadingValue?: unknown } | undefined, mode: { optimistic: boolean; structured: boolean; derived?: boolean; record?: boolean; plain?: boolean }, key?: string): [Acc, Writer] {
       const fn = named(name, compute);
-      if (mode.optimistic && mode.structured) { const [store] = (createOptimisticStore as any)((draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); return landDraft(draft, r, key); }, key && !mode.record ? [] : {}, key ? { key } : undefined); return ro(() => store); }
+      const derive = (draft: any) => { const r = fn(draft); if (r instanceof Flight || r instanceof Promise) return (async () => landDraft(draft, r instanceof Flight ? await r.first : await r, key))(); return landDraft(draft, r, key); };
+      if (mode.optimistic && mode.structured && mode.plain && !mode.derived) { const [truth] = (createStore as any)(derive, key && !mode.record ? [] : {}, key ? { key } : undefined); (createOptimisticStore as any)(() => (key && !mode.record ? [] : {}), key && !mode.record ? [] : {}, key ? { key } : undefined); return ro(() => truth); }   // the client's layer, created for its owner slot only: the server shows the truth (it has no guesses), since Solid's server runs a projection's fn at once and one over a pending store throws NotReadyError out of the component (solidjs/solid#5097)
+      if (mode.optimistic && mode.structured) { const [store] = (createOptimisticStore as any)(derive, key && !mode.record ? [] : {}, key ? { key } : undefined); return ro(() => store); }
       if (mode.optimistic && mode.derived) { const [get] = createOptimistic(fn as any, o as any); return ro(get as Acc); }   // AC-3 over an equation: the client's createOptimistic(fn), so the owner trees (and hydration keys) match
       if (mode.optimistic) { const [truth] = createSignal(fn as any, o as any); const [get] = createOptimistic(() => (truth as Acc)()); return ro(get as Acc); }
       if (mode.structured) {

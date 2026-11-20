@@ -234,16 +234,6 @@ export default component App() {
 ```
 
 ```rx
--- reject: GUESS_NO_QUESTION
-export default component App() {
-  source shown := "Ann"
-  action fix() { guess shown := "Zed"; await fetch("x") }
-
-  <p>{shown}</p>
-}
-```
-
-```rx
 -- reject: INVALID_REFRESH_TARGET
 export default component App() {
   source base := 1
