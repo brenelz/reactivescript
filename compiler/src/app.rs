@@ -23,7 +23,7 @@ pub fn target(name: &str) -> Target {
     }
 }
 
-/// `{entry, css, modules: {path: {code, map}}}`, or `{diagnostics: [...]}` / `{error}`. `entry` is an absolute path.
+/// `{entry, css, modules: {path: {code, map, css}}}` (the program's stylesheet, and each module's own), or `{diagnostics: [...]}` / `{error}`. `entry` is an absolute path.
 /// `spa`: a client-only build, checked under 08 CN-3d.
 pub fn app(entry: &str, target: Target, module_name: &str, spa: bool) -> Value {
     app_with(entry, target, module_name, spa, false, &read_disk)
@@ -55,7 +55,7 @@ pub fn app_with(entry: &str, target: Target, module_name: &str, spa: bool, jsx: 
             let path = &out.paths[name];
             let text = read(path).unwrap_or_default();
             let l = lower_view(module, path, target, module_name, Some((path, &text))).map_err(|e| json!({ "error": e }))?;
-            let mut m = json!({ "code": l.code, "map": l.map });
+            let mut m = json!({ "code": l.code, "map": l.map, "css": out.module_css[name] });
             if jsx {
                 m["jsx"] = json!(view_jsx(module));
             }
