@@ -752,7 +752,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
             bind(set, { kind: "setter", of: get, guess: true });
           }
         } else if (d.id.type === "Identifier") {
-          if (name === "createMemo") bind(d.id.name, { kind: "read" });
+          if (name === "createMemo" || name === "createDeferred") bind(d.id.name, { kind: "read" });
           else if (d.init?.type === "ArrowFunctionExpression" && d.init.body.type === "BlockStatement" && !returned(d.init) && (setup || !d.init.async)) bind(d.id.name, { kind: "handler", fn: d.init });
           else if (setup && d.init?.type === "ArrowFunctionExpression") (bind(d.id.name, { kind: "plain" }), later.push(d));
           else if (s.kind === "let" && (setup || d.init) && !isFn(d.init) && !/^create[A-Z]/.test(name ?? "")) bind(d.id.name, { kind: "mutable" });
@@ -881,6 +881,10 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       if (d.id.type === "Identifier" && !init && lookup(d.id.name)?.kind === "mutable") return [`source ${d.id.name}${d.id.typeAnnotation ? text(d.id.typeAnnotation) : ""} := undefined`];
       if (d.id.type !== "Identifier" || !init) return fail(d, `${text(d).split("\n")[0]}: no .rx form in this prototype`), [];
       const id = d.id.name as string;
+      if (name === "createDeferred") {
+        const e = returned(a[0]);
+        return e ? `deferred ${id} = ${expr(e)}`.split("\n") : (fail(d, `${id}: a deferred value with statements; .rx equations are one expression`), []);
+      }
       if (name === "createMemo" && byName(a[0])) return `${id} = ${asked(a[0])}`.split("\n");
       if (name === "createMemo") {
         const e = returned(a[0]);

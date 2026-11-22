@@ -16,6 +16,7 @@ export const SOLID_PRIMS: Record<string, string> = {
   latest: "latest x (R-12)",
   isPending: "pending? x (R-9)",
   onFlush: "onFlush(() => { … }) (EF-8)",
+  createDeferred: "deferred x = e: an equation that lags its inputs on purpose (V-16)",
   createEffect: "effect (a, b) { … }: the inputs it runs for, then what it does with them ($0, $1) (EF-1)",
   onSettled: "onSettled (EF-7)",
   until: "until (AC-6)",
@@ -67,6 +68,7 @@ export function noteFor(line: string): Note | undefined {
     return { helper: "guess", name: n, reads: [], text: `guess ${n} := …: shows now, reverts if the action fails` };
   }
   if ((m = /^\s*affects\((\w+)\)/.exec(line))) return { helper: "affects", name: m[1], reads: [], text: `affects ${m[1]}: pending? ${m[1]} is true while the action runs` };
+  if ((m = /const (\w+) = createDeferred\(/.exec(line))) return { helper: "createDeferred", name: m[1], reads: [], text: `deferred ${m[1]} = …: follows its inputs a step behind (V-16)` };
   if (/^\s*onFlush\(/.test(line)) return { helper: "onFlush", reads: [], text: "lands now, in its own instant (EF-8)" };
   if (/^\s*createEffect\(/.test(line)) return { helper: "createEffect", reads: [], text: "effect (…) { … }: runs when an input's value changes; a returned function is its cleanup (EF-2, EF-5)" };
   if ((m = /^\s*<(Errored|Loading|Show|For)\b/.exec(line))) return { helper: m[1], reads: [], text: SOLID_PRIMS[m[1]] };

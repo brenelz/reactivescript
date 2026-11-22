@@ -476,6 +476,15 @@ export default function App() {
     "effect () {",
     'console.log("mounted")',
   ] },
+  // createDeferred is a deferred equation (V-16)
+  "a deferred value": { solid: `import { createDeferred, createSignal } from "solid-js";
+
+export default function App() {
+  const [query, setQuery] = createSignal("");
+  const shown = createDeferred(() => query().toUpperCase());
+  return <p onClick={() => setQuery("a")}>{shown()}</p>;
+}
+`, has: ["deferred shown = query.toUpperCase()", "{shown}"] },
   refused: { solid: `import { createSignal, createEffect, createMemo } from "solid-js";
 
 function useDouble(n) {

@@ -7,6 +7,7 @@ import { presets } from "./presets";
 import { decode, encode } from "./share";
 import { formatSolid, solidToRx } from "./format";
 import { HELPERS, type RxProblem } from "./torx";
+import { solidPlaygroundUrl, solidTabs } from "./solidplay";
 import { completeAt, completeAtSolid, typeAt, typeAtSolid, withImport, type Entry, type Hover } from "./hover";
 
 const GUIDE = "https://github.com/solidjs/reactivescript/blob/main/guide/diagnostics.md";
@@ -389,16 +390,27 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
       .map(([p, m]) => ({ path: p, jsx: m.jsx ?? "" })),
   );
   const rawJsx = createMemo(() => modules().map((m) => m.jsx).join("\n\n"));
-  const [solid, setSolid] = createSignal<{ raw: string; code: string; error?: string }>({ raw: "", code: "" });
+  const [solid, setSolid] = createSignal<{ raw: string; code: string; error?: string; parts?: { path: string; code: string }[] }>({ raw: "", code: "" });
   createEffect(
     () => [rawJsx(), modules()] as const,
     ([raw, mods]) => {
-      Promise.all(mods.map((m) => formatSolid(m.jsx).then((r) => ({ ...r, code: m.path === ENTRY ? r.code : `// ${m.path}\n${r.code}` }))))
-        .then((rs) => rawJsx() === raw && setSolid({ raw, code: rs.map((r) => r.code).join("\n"), error: rs.find((r) => r.error)?.error }))
+      Promise.all(mods.map((m) => formatSolid(m.jsx).then((r) => ({ ...r, path: m.path }))))
+        .then(
+          (rs) =>
+            rawJsx() === raw &&
+            setSolid({ raw, code: rs.map((r) => (r.path === ENTRY ? r.code : `// ${r.path}\n${r.code}`)).join("\n"), error: rs.find((r) => r.error)?.error, parts: rs.map((r) => ({ path: r.path, code: r.code })) }),
+        )
         .catch((e) => rawJsx() === raw && setSolid({ raw, code: raw, error: String(e?.message ?? e) }));
     },
   );
   const shown = () => (solid().raw === rawJsx() ? solid().code : "");
+  // the same program, where it can run: playground.solidjs.com takes its tabs from the URL
+  const elsewhere = createMemo(() => {
+    const s = solid();
+    if (s.raw !== rawJsx() || !s.parts || s.error || stale()) return { why: "nothing to open until the program compiles" };
+    const t = solidTabs(s.parts, files(), lastGood()?.app.css ?? "");
+    return t.tabs ? { url: solidPlaygroundUrl(t.tabs) } : { why: t.why ?? "" };
+  });
   const codeHtml = createMemo(() =>
     shown()
       .split("\n")
@@ -583,6 +595,18 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
             <span class="label">Solid primitives</span>
             <span class="hint">what the compiler's __rt calls are in Solid 2.0, for reading</span>
             <span class="spacer" />
+            <Show
+              when={elsewhere().url}
+              fallback={
+                <span class="btn off" data-testid="open-solid" title={elsewhere().why}>
+                  Open in Solid Playground
+                </span>
+              }
+            >
+              <a class="btn" data-testid="open-solid" href={elsewhere().url} target="_blank" rel="noopener" title="Run this Solid view at playground.solidjs.com">
+                Open in Solid Playground
+              </a>
+            </Show>
             <label class="check">
               <input type="checkbox" checked={explain()} onChange={(e) => setExplain(e.currentTarget.checked)} data-testid="explain-toggle" /> Explain
             </label>

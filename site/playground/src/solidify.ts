@@ -240,6 +240,11 @@ export function solidify(code: string): string {
     used.add("createMemo");
     return `createMemo(${unprev(a[1])}${a[2] && a[2] !== "undefined" ? `, ${a[2]}` : ""})`;
   });
+  // `deferred x = e` (V-16): a memo that lags its inputs on purpose
+  code = eachCall(code, "__rt.deferred", (a) => {
+    used.add("createDeferred");
+    return `createDeferred(${unprev(a[1])}${a[2] && a[2] !== "undefined" ? `, ${a[2]}` : ""})`;
+  });
   code = code.replace(/!__rt\.eq\(/g, "__rt.neq(");
   code = eachCall(code, "__rt.neq", (a) => `((${a[0]}) !== (${a[1]}))`);
   code = eachCall(code, "__rt.eq", (a) => `((${a[0]}) === (${a[1]}))`);

@@ -113,6 +113,9 @@ pre.err { margin: 8px 16px; padding: 10px 12px; border: 1px solid #5a2a33; backg
 .checks .msg { display: block; margin-top: 2px; }
 .explain .ok { color: var(--green); margin: 8px 0 0; font-size: 14px; }
 .btn:disabled { opacity: 0.45; cursor: default; }
+a.btn { color: var(--text); font-size: 13px; padding: 4px 10px; }
+a.btn:hover { text-decoration: none; border-color: var(--blue); }
+.btn.off { opacity: 0.45; cursor: default; font-size: 13px; padding: 4px 10px; }
 pre.code.helper { padding: 10px 0 0; }
 
 /* highlight.js tokens in the site's colours */

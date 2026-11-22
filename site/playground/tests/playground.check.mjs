@@ -326,6 +326,28 @@ await check("the Solid pane has TypeScript too: an accessor's type on hover, and
   await page.getByTestId("mode").click();
 });
 
+await check("Open in Solid Playground carries the view as tabs, with what it imports and its scoped styles", async () => {
+  // what the link's hash holds, read back the way the Solid playground reads it
+  const tabs = async () => {
+    const href = await page.getByTestId("open-solid").getAttribute("href");
+    assert(href?.startsWith("https://playground.solidjs.com/#"), `no link: ${href}`);
+    const { decompressFromURL } = await import("@amoutonbrady/lz-string");
+    return JSON.parse(decompressFromURL(href.slice(href.indexOf("#") + 1)));
+  };
+  await page.getByTestId("example").selectOption("await");
+  await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
+  await settle();
+  let t = await tabs();
+  assert(t.map((x) => x.name).join() === "main.tsx,users.jsx", `tabs: ${t.map((x) => x.name)}`);
+  assert(t[0].source.startsWith('import { render } from "@solidjs/web";') && t[0].source.includes('render(() => <App />, document.getElementById("app")!);') && !t[0].source.includes("export default"), `main.tsx does not mount the view:\n${t[0].source}`);
+  assert(t[0].source.includes("opacity: 0.5") && t[1].source.includes("export async function fetchUser"), "the styles or the imported module are missing");
+  // a program that would not run there has no link, and says why
+  await type(`import { report } from "./io"\nexport default component App() {\n  source n := 0\n  <p onClick={() => { report(n) }}>{n}</p>\n}\n`);
+  await page.locator("span[data-testid=open-solid]").waitFor({ timeout: 5000 });
+  const why = await page.getByTestId("open-solid").getAttribute("title");
+  assert(why.includes("./io"), `the reason does not name the missing module: ${why}`);
+});
+
 await check("no uncaught page errors", async () => {
   assert(pageErrors.length === 0, pageErrors.join("\n"));
 });

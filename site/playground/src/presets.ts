@@ -4,6 +4,17 @@ const users = {
   "users.d.rx": `export pure fn fetchUser(id: number) rejects(NotFound)
 export error NotFound
 `,
+  // what users.d.rx declares: the compiler reads the declaration, a browser runs this
+  "users.js": `const NAMES = ["Ada", "Grace", "Anders", "Brendan"];
+
+export class NotFound extends Error {}
+
+export async function fetchUser(id) {
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  if (id > NAMES.length) throw new NotFound("There is no user " + id);
+  return { id, name: NAMES[id - 1] };
+}
+`,
 };
 
 export const presets: Preset[] = [
@@ -101,6 +112,20 @@ export default component App() {
 `,
       "names.d.rx": `export pure fn loadName()
 export pure fn saveName(name: string)
+`,
+      "names.js": `let saved = "Ada";
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function loadName() {
+  await wait(300);
+  return saved;
+}
+
+export async function saveName(name) {
+  await wait(700);
+  if (!name.trim()) throw new Error("A name cannot be empty.");
+  return (saved = name.trim());
+}
 `,
     },
   },
