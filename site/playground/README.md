@@ -38,6 +38,21 @@ compiler then checks the `.rx`, so a Solid program with, say, an await and no `E
 `pnpm test:torx` is the round trip: each example's `.rx` → Solid view → `.rx` → Solid view must give the same view,
 plus hand-written Solid that must convert and compile, or be refused with reasons.
 
+## Types on hover, and completion
+
+Both editors answer two questions from TypeScript's language service, which runs in a Web Worker
+(`src/types.worker.ts`) that loads on the first hover or completion (7.9 MB, 1.7 MB gzipped, with TypeScript, its
+DOM and ES libraries, and Solid's types).
+
+For `.rx`, the worker reads what the editor extension reads: the crate's TSX projection of each module and its
+mappings onto the `.rx` (`analyze`, spec/13 TY-1c). `src/hover.ts` takes the offset under the pointer or at the caret
+through those mappings, so `id` reads `source id: number`, an attribute shows its documentation, and `user.` offers
+the store's fields. A `.d.rx`'s functions are declared from their written parameters. Names every JavaScript module
+has are left out, because `.rx` has none.
+
+In the Solid → .rx pane the worker reads the Solid source as it is. Every `solid-js` export is offered where a name
+can stand, and picking one that is not imported adds it to the import.
+
 ## Run
 
 ```sh

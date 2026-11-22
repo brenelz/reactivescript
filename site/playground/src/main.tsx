@@ -7,6 +7,7 @@ import { presets } from "./presets";
 import { decode, encode } from "./share";
 import { formatSolid, solidToRx } from "./format";
 import { HELPERS, type RxProblem } from "./torx";
+import { completeAt, completeAtSolid, typeAt, typeAtSolid, withImport, type Entry, type Hover } from "./hover";
 
 const GUIDE = "https://github.com/solidjs/reactivescript/blob/main/guide/diagnostics.md";
 
@@ -23,14 +24,136 @@ function lineCol(text: string, line: number, column: number) {
 }
 
 /** A textarea over its highlighted copy. */
-function Editor(props: { value: string; html: string; onChange: (value: string) => void; testid: string; ref?: (el: HTMLTextAreaElement) => void }) {
+function Editor(props: { value: string; html: string; onChange: (value: string) => void; testid: string; ref?: (el: HTMLTextAreaElement) => void; typeAt?: (offset: number) => Promise<Hover | undefined>; completeAt?: (offset: number, text: string) => Promise<{ from: number; items: Entry[] }> }) {
   let textarea!: HTMLTextAreaElement;
   let backdrop!: HTMLPreElement;
+  const [tip, setTip] = createSignal<{ hover: Hover; left: number; top: number } | undefined>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let asked = -1;
+  const hide = () => {
+    clearTimeout(timer);
+    asked = -1;
+    setTip(undefined);
+  };
   const syncScroll = () => {
     backdrop.scrollTop = textarea.scrollTop;
     backdrop.scrollLeft = textarea.scrollLeft;
+    hide();
+  };
+  /** Where the text sits: the padding, a line's height and a character's width, measured from the backdrop. */
+  const metrics = () => {
+    const cs = getComputedStyle(backdrop);
+    const probe = document.createElement("span");
+    probe.textContent = "0".repeat(100);
+    probe.style.cssText = "position:absolute;visibility:hidden";
+    backdrop.append(probe);
+    const box = probe.getBoundingClientRect();
+    probe.remove();
+    return { left: parseFloat(cs.paddingLeft), top: parseFloat(cs.paddingTop), line: box.height, char: box.width / 100 };
+  };
+  const onMove = (e: MouseEvent) => {
+    if (!props.typeAt) return;
+    clearTimeout(timer);
+    const box = textarea.getBoundingClientRect();
+    const m = metrics();
+    const row = Math.floor((e.clientY - box.top + textarea.scrollTop - m.top) / m.line);
+    const column = (e.clientX - box.left + textarea.scrollLeft - m.left) / m.char;
+    const lines = props.value.split("\n");
+    // a tab is as wide as the tab-size, so columns are counted, not characters
+    let at = 0;
+    let width = 0;
+    const text = lines[row] ?? "";
+    while (at < text.length && width + (text[at] === "\t" ? 2 - (width % 2) : 1) <= column) width += text[at++] === "\t" ? 2 - (width % 2) : 1;
+    if (row < 0 || row >= lines.length || column < 0 || at >= text.length || !/[\w$.]/.test(text[at])) return hide();
+    const offset = lines.slice(0, row).reduce((n, l) => n + l.length + 1, 0) + at;
+    const shown = tip();
+    if (shown && offset >= shown.hover.start && offset < shown.hover.start + shown.hover.length) return;
+    timer = setTimeout(async () => {
+      asked = offset;
+      const hover = await props.typeAt!(offset).catch(() => undefined);
+      if (asked !== offset) return;
+      if (!hover) return setTip(undefined);
+      const before = props.value.slice(0, hover.start);
+      const line = before.split("\n").length - 1;
+      const col = [...before.slice(before.lastIndexOf("\n") + 1)].reduce((w, c) => w + (c === "\t" ? 2 - (w % 2) : 1), 0);
+      setTip({ hover, left: Math.max(4, m.left + col * m.char - textarea.scrollLeft), top: m.top + (line + 1) * m.line - textarea.scrollTop + 4 });
+    }, 180);
+  };
+  // what can be written at the caret, as a list under it
+  const [menu, setMenu] = createSignal<{ from: number; to: number; items: Entry[]; index: number; left: number; top: number } | undefined>();
+  let suggesting: ReturnType<typeof setTimeout> | undefined;
+  let wanted = 0;
+  let list: HTMLUListElement | undefined;
+  createEffect(
+    () => menu()?.index,
+    (index) => {
+      if (index !== undefined) list?.children[index]?.scrollIntoView({ block: "nearest" });
+    },
+  );
+  const close = () => {
+    clearTimeout(suggesting);
+    wanted++;
+    setMenu(undefined);
+  };
+  /** Where an offset of `text` is drawn, in the editor's box. */
+  const place = (text: string, offset: number) => {
+    const m = metrics();
+    const before = text.slice(0, offset);
+    const col = [...before.slice(before.lastIndexOf("\n") + 1)].reduce((w, c) => w + (c === "\t" ? 2 - (w % 2) : 1), 0);
+    return { left: Math.max(4, m.left + col * m.char - textarea.scrollLeft), top: m.top + before.split("\n").length * m.line - textarea.scrollTop + 2 };
+  };
+  const suggest = (force = false) => {
+    if (!props.completeAt) return;
+    clearTimeout(suggesting);
+    suggesting = setTimeout(async () => {
+      const text = textarea.value;
+      const at = textarea.selectionStart;
+      if (at !== textarea.selectionEnd) return close();
+      // after a dot, or inside a word; anywhere when asked for
+      if (!force && !/[\w$.]/.test(text[at - 1] ?? "")) return close();
+      const mine = ++wanted;
+      const found = await props.completeAt!(at, text).catch(() => undefined);
+      if (mine !== wanted) return;
+      if (!found?.items.length || textarea.selectionStart !== at) return setMenu(undefined);
+      hide();
+      setMenu({ from: found.from, to: at, items: found.items, index: 0, ...place(text, found.from) });
+    }, 90);
+  };
+  const accept = (item: Entry) => {
+    const m = menu();
+    if (!m) return;
+    let text = textarea.value.slice(0, m.from) + item.name + textarea.value.slice(m.to);
+    let caret = m.from + item.name.length;
+    if (item.importFrom) {
+      const added = withImport(text, item.name, item.importFrom);
+      text = added.text;
+      if (added.at <= caret) caret += added.shift;
+    }
+    close();
+    props.onChange(text);
+    queueMicrotask(() => {
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+    });
   };
   const onKey = (e: KeyboardEvent) => {
+    const m = menu();
+    if (m) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        return void setMenu({ ...m, index: (m.index + (e.key === "ArrowDown" ? 1 : m.items.length - 1)) % m.items.length });
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        return accept(m.items[m.index]);
+      }
+      if (e.key === "Escape") return close();
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") close();
+    }
+    if (e.key === " " && e.ctrlKey) {
+      e.preventDefault();
+      return suggest(true);
+    }
     if (e.key === "Tab" && !e.shiftKey) {
       e.preventDefault();
       const { selectionStart: s, selectionEnd: end, value } = textarea;
@@ -51,10 +174,39 @@ function Editor(props: { value: string; html: string; onChange: (value: string) 
         autocapitalize="off"
         autocomplete="off"
         value={props.value}
-        onInput={(e) => props.onChange(e.currentTarget.value)}
-        onScroll={syncScroll}
+        onInput={(e) => (hide(), props.onChange(e.currentTarget.value), suggest())}
+        onScroll={() => (syncScroll(), close())}
         onKeyDown={onKey}
+        onMouseMove={onMove}
+        onMouseLeave={hide}
+        onMouseDown={close}
+        onBlur={close}
       />
+      <Show when={menu()}>
+        {(m) => (
+          <ul class="complete" data-testid="complete" ref={list} style={{ left: `${m().left}px`, top: `${m().top}px` }}>
+            <For each={m().items} keyed={false}>
+              {(item, i) => (
+                // mousedown, and no focus taken: the caret stays where the name goes
+                <li class={i === m().index ? "on" : ""} onMouseDown={(e) => (e.preventDefault(), accept(item()))}>
+                  <span>{item().name}</span>
+                  <i>{item().kind === "const" || item().kind === "let" || item().kind === "var" ? "name" : item().kind}</i>
+                </li>
+              )}
+            </For>
+          </ul>
+        )}
+      </Show>
+      <Show when={tip()}>
+        {(t) => (
+          <div class="hover" data-testid="hover" style={{ left: `${t().left}px`, top: `${t().top}px` }}>
+            <pre innerHTML={highlight(t().hover.text, "javascript")} />
+            <Show when={t().hover.doc}>
+              <p>{t().hover.doc}</p>
+            </Show>
+          </div>
+        )}
+      </Show>
     </div>
   );
 }
@@ -105,7 +257,15 @@ function FromSolid(props: { source: string; onChange: (value: string) => void; f
             <button type="button">App.tsx</button>
           </span>
         </div>
-        <Editor value={props.source} html={html()} onChange={props.onChange} testid="solid-editor" ref={(el) => (textarea = el)} />
+        <Editor
+          value={props.source}
+          html={html()}
+          onChange={props.onChange}
+          testid="solid-editor"
+          ref={(el) => (textarea = el)}
+          typeAt={(offset) => typeAtSolid(props.source, props.files, offset)}
+          completeAt={(offset, text) => completeAtSolid(text, props.files, offset)}
+        />
         <div class="diags" data-testid="rx-problems">
           <div class="label">
             Not converted <span class={`count${problems().length ? " bad" : ""}`}>{problems().length}</span>
@@ -391,7 +551,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
               +
             </button>
           </div>
-          <Editor value={text()} html={editLines()} onChange={update} testid="editor" ref={(el) => (textarea = el)} />
+          <Editor value={text()} html={editLines()} onChange={update} testid="editor" ref={(el) => (textarea = el)} typeAt={(offset) => typeAt(files(), active(), offset)} completeAt={(offset, text) => completeAt({ ...files(), [active()]: text }, active(), offset)} />
           <div class="diags" data-testid="diagnostics">
             <div class="label">
               Diagnostics <span class={`count${diagnostics().length ? " bad" : ""}`}>{diagnostics().length}</span>

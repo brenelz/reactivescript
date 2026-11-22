@@ -194,6 +194,138 @@ await check("Solid → .rx reads the Solid view back as .rx, lists what it canno
   await js.getByText("const doubled = createMemo", { exact: false }).first().waitFor({ timeout: 5000 });
 });
 
+await check("hovering a name shows its type, and an attribute its documentation", async () => {
+  await page.getByTestId("example").selectOption("await");
+  await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
+  // where a name is on screen: the editor's padding and character size, as the page lays them out
+  const point = (needle, nth = 0) =>
+    page.evaluate(
+      ([needle, nth]) => {
+        const ta = document.querySelector("[data-testid=editor]");
+        const bd = ta.previousElementSibling;
+        const cs = getComputedStyle(bd);
+        const probe = document.createElement("span");
+        probe.textContent = "0".repeat(100);
+        probe.style.cssText = "position:absolute;visibility:hidden";
+        bd.append(probe);
+        const b = probe.getBoundingClientRect();
+        probe.remove();
+        let i = -1;
+        for (let k = 0; k <= nth; k++) i = ta.value.indexOf(needle, i + 1);
+        const before = ta.value.slice(0, i);
+        const box = ta.getBoundingClientRect();
+        return { x: box.left + parseFloat(cs.paddingLeft) + (before.length - before.lastIndexOf("\n") - 1 + 1.5) * (b.width / 100) - ta.scrollLeft, y: box.top + parseFloat(cs.paddingTop) + (before.split("\n").length - 0.5) * b.height - ta.scrollTop };
+      },
+      [needle, nth],
+    );
+  // the tooltip for a name, once it says what is expected (the last one stays up until the next arrives)
+  const hover = async (needle, nth, ...expected) => {
+    const p = await point(needle, nth);
+    await page.mouse.move(p.x - 200, p.y + 150);
+    await page.mouse.move(p.x, p.y);
+    const tip = page.getByTestId("hover");
+    await tip.waitFor({ timeout: 30000 });
+    const said = () => tip.innerText().then((t) => t.replace(/\s+/g, " "));
+    for (let i = 0; i < 40; i++) {
+      const t = await said().catch(() => "");
+      if (expected.every((e) => t.includes(e))) return t;
+      await page.waitForTimeout(150);
+    }
+    throw new Error(`hovering ${needle}: expected ${expected.join(" and ")}, the tooltip says:\n${await said().catch(() => "(nothing)")}`);
+  };
+  await hover("label", 0, "label: string");
+  await hover("id", 0, "source id: number");
+  const fn = await hover("fetchUser", 1, "fetchUser(id: number): any");
+  assert(!fn.includes("import"), `a .d.rx function reads as an import:\n${fn}`);
+  await hover("class", 0, "class?:", "Class names to apply");
+  await page.mouse.move(5, 5);
+  await page.getByTestId("hover").waitFor({ state: "detached", timeout: 5000 });
+});
+
+await check("typing offers what fits: a store's fields after a dot, names in scope, and a keyword", async () => {
+  const program = `export default component App() {\n  source user := { name: "Ada", age: 36 }\n  source count := 0\n  shown = \n  <p>{shown}</p>\n}\n`;
+  await type(program);
+  await editor.evaluate((el, at) => (el.focus(), el.setSelectionRange(at, at)), program.indexOf("shown = ") + 8);
+  const menu = page.getByTestId("complete");
+  // the list, once it holds exactly these names (it follows the typing)
+  const offers = async (...names) => {
+    let seen = [];
+    for (let i = 0; i < 100; i++) {
+      seen = (await menu.locator("li span").allInnerTexts().catch(() => [])).map((t) => t.trim());
+      if (seen.join() === names.join()) return;
+      await page.waitForTimeout(150);
+    }
+    throw new Error(`expected ${names.join(", ")}; the list holds ${seen.join(", ") || "nothing"}`);
+  };
+  await page.keyboard.type("user.");
+  await offers("age", "name");
+  await page.keyboard.type("na");
+  await offers("name");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type(" + cou");
+  await offers("count");
+  await page.keyboard.press("Tab");
+  assert((await editor.inputValue()).includes("  shown = user.name + count\n"), `the names were not written:\n${await editor.inputValue()}`);
+  await page.keyboard.type(" + so");
+  await offers("source");
+  await page.keyboard.press("Escape");
+  await menu.waitFor({ state: "detached", timeout: 5000 });
+});
+
+await check("the Solid pane has TypeScript too: an accessor's type on hover, and a store's fields after a dot", async () => {
+  await page.getByTestId("mode").click();
+  const solidEditor = page.getByTestId("solid-editor");
+  const program = `import { createSignal, createStore } from "solid-js";\nexport default function App() {\n  const [count, setCount] = createSignal(0);\n  const [user] = createStore({ name: "Ada", age: 36 });\n  return <p>{count()} </p>;\n}\n`;
+  await solidEditor.fill(program);
+  const tips = page.getByTestId("hover");
+  const menus = page.getByTestId("complete");
+  // the pointer over `count` in `{count()}`: the pane's own editor, its own padding
+  const p = await solidEditor.evaluate((ta, at) => {
+    const bd = ta.previousElementSibling;
+    const cs = getComputedStyle(bd);
+    const probe = document.createElement("span");
+    probe.textContent = "0".repeat(100);
+    probe.style.cssText = "position:absolute;visibility:hidden";
+    bd.append(probe);
+    const b = probe.getBoundingClientRect();
+    probe.remove();
+    const before = ta.value.slice(0, at);
+    const box = ta.getBoundingClientRect();
+    return { x: box.left + parseFloat(cs.paddingLeft) + (before.length - before.lastIndexOf("\n") - 1 + 1.5) * (b.width / 100), y: box.top + parseFloat(cs.paddingTop) + (before.split("\n").length - 0.5) * b.height };
+  }, program.indexOf("{count()}") + 1);
+  await page.mouse.move(p.x - 200, p.y + 150);
+  await page.mouse.move(p.x, p.y);
+  let said = "";
+  for (let i = 0; i < 100 && !said.includes("const count: () => number"); i++) {
+    said = (await tips.innerText().catch(() => "")).replace(/\s+/g, " ");
+    await page.waitForTimeout(150);
+  }
+  assert(said.includes("const count: () => number"), `an accessor's type:\n${said || "(no tooltip)"}`);
+  await solidEditor.evaluate((el, at) => (el.focus(), el.setSelectionRange(at, at)), program.indexOf("{count()} ") + 10);
+  await page.keyboard.type("{user.");
+  let seen = [];
+  for (let i = 0; i < 100 && seen.join() !== "age,name"; i++) {
+    seen = (await menus.locator("li span").allInnerTexts().catch(() => [])).map((t) => t.trim());
+    await page.waitForTimeout(150);
+  }
+  assert(seen.join() === "age,name", `a store's fields: ${seen.join(", ") || "nothing"}`);
+  await page.keyboard.press("Enter");
+  assert((await solidEditor.inputValue()).includes("{count()} {user.age"), `the field was not written:\n${await solidEditor.inputValue()}`);
+  // a Solid primitive the file has not imported is offered, and picking it imports it
+  await solidEditor.evaluate((el, at) => (el.focus(), el.setSelectionRange(at, at)), (await solidEditor.inputValue()).indexOf("  return <p>"));
+  await page.keyboard.type("const m = createMe");
+  seen = [];
+  for (let i = 0; i < 100 && !seen.includes("createMemo"); i++) {
+    seen = (await menus.locator("li span").allInnerTexts().catch(() => [])).map((t) => t.trim());
+    await page.waitForTimeout(150);
+  }
+  assert(seen[0] === "createMemo", `createMemo is not offered first: ${seen.join(", ") || "nothing"}`);
+  await page.keyboard.press("Enter");
+  const picked = await solidEditor.inputValue();
+  assert(picked.includes('import { createSignal, createStore, createMemo } from "solid-js";') && picked.includes("const m = createMemo  return"), `the import was not added:\n${picked}`);
+  await page.getByTestId("mode").click();
+});
+
 await check("no uncaught page errors", async () => {
   assert(pageErrors.length === 0, pageErrors.join("\n"));
 });

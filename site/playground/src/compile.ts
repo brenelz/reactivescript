@@ -56,6 +56,21 @@ export const toFs = (files: Record<string, string>): Files =>
 
 const normalize = (d: any): Diagnostic => ({ ...d, message: d.message ?? d.msg ?? "" });
 
+/** Each module's TSX projection with its mappings onto the .rx (spec/13 TY-1c), and the prelude it imports. */
+export function projection(files: Record<string, string>): { prelude: string; code: Record<string, string>; mappings: Record<string, [number, number, number][]> } {
+  const out = { prelude: "", code: {} as Record<string, string>, mappings: {} as Record<string, [number, number, number][]> };
+  if (!call) return out;
+  const fs = toFs(files);
+  try {
+    out.prelude = call("prelude", {});
+    for (const file of Object.keys(fs).filter((f) => f.endsWith(".rx") && !f.endsWith(".d.rx"))) {
+      const a = call("analyze", { file, prelude: "./prelude" }, fs);
+      if (a.code) (out.code[file] = a.code), (out.mappings[file] = a.mappings ?? []);
+    }
+  } catch {}
+  return out;
+}
+
 export function compile(files: Record<string, string>, target: Target): Result {
   if (!call) return { diagnostics: [], app: { error: "the compiler is not loaded: reload the page" }, ms: 0 };
   const t0 = performance.now();

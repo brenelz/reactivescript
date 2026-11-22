@@ -60,6 +60,14 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .editor textarea { background: transparent; color: transparent; caret-color: var(--text); resize: none; outline: none; }
 .editor textarea::selection { background: rgba(91, 155, 230, 0.35); color: transparent; }
 .editor .backdrop { color: var(--text); pointer-events: none; }
+.hover { position: absolute; z-index: 3; max-width: min(560px, calc(100% - 12px)); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); pointer-events: none; }
+.hover pre { margin: 0; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hover p { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+.complete { position: absolute; z-index: 4; list-style: none; margin: 0; padding: 4px; min-width: 180px; max-width: 360px; max-height: 208px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font: 13px/1.5 var(--mono); }
+.complete li { display: flex; justify-content: space-between; gap: 16px; padding: 2px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.complete li.on { background: var(--blue); color: var(--bg); }
+.complete li i { font-style: normal; font-size: 11.5px; color: var(--muted); }
+.complete li.on i { color: var(--bg); }
 .eline.bad { background: rgba(255, 138, 128, 0.12); box-shadow: inset 3px 0 var(--red); display: inline-block; min-width: 100%; }
 .hl-k { color: var(--blue); } .hl-w { color: var(--amber); } .hl-s { color: var(--green); } .hl-c { color: var(--comment); } .hl-t { color: var(--violet); }
 
