@@ -5,7 +5,8 @@ import { highlight, highlightRx } from "./highlight";
 import { noteFor, primsIn } from "./explain";
 import { presets } from "./presets";
 import { decode, encode } from "./share";
-import { formatSolid } from "./format";
+import { formatSolid, solidToRx } from "./format";
+import { HELPERS, type RxProblem } from "./torx";
 
 const GUIDE = "https://github.com/solidjs/reactivescript/blob/main/guide/diagnostics.md";
 
@@ -19,6 +20,164 @@ function lineCol(text: string, line: number, column: number) {
     i = n + 1;
   }
   return Math.min(i + column, text.length);
+}
+
+/** A textarea over its highlighted copy. */
+function Editor(props: { value: string; html: string; onChange: (value: string) => void; testid: string; ref?: (el: HTMLTextAreaElement) => void }) {
+  let textarea!: HTMLTextAreaElement;
+  let backdrop!: HTMLPreElement;
+  const syncScroll = () => {
+    backdrop.scrollTop = textarea.scrollTop;
+    backdrop.scrollLeft = textarea.scrollLeft;
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      const { selectionStart: s, selectionEnd: end, value } = textarea;
+      props.onChange(value.slice(0, s) + "  " + value.slice(end));
+      queueMicrotask(() => textarea.setSelectionRange(s + 2, s + 2));
+    }
+  };
+  return (
+    <div class="editor">
+      <pre class="backdrop" aria-hidden="true" ref={backdrop} innerHTML={props.html + "\n"} />
+      <textarea
+        ref={(el) => {
+          textarea = el;
+          props.ref?.(el);
+        }}
+        data-testid={props.testid}
+        spellcheck={false}
+        autocapitalize="off"
+        autocomplete="off"
+        value={props.value}
+        onInput={(e) => props.onChange(e.currentTarget.value)}
+        onScroll={syncScroll}
+        onKeyDown={onKey}
+      />
+    </div>
+  );
+}
+
+const SAMPLE_SOLID = `import { createSignal, createMemo } from "solid-js";
+
+export default function Counter() {
+  const [count, setCount] = createSignal(0);
+  const doubled = createMemo(() => count() * 2);
+  return <button onClick={() => setCount(count() + 1)}>{doubled()}</button>;
+}
+`;
+
+/** Solid 2.0 on the left, the same program as .rx on the right (torx.ts), checked by the compiler. */
+function FromSolid(props: { source: string; onChange: (value: string) => void; files: Record<string, string>; ready: boolean; hidden: boolean; onUse: (rx: string, files: Record<string, string>) => void }) {
+  const [out, setOut] = createSignal<{ of: string; code: string; problems: RxProblem[]; files: Record<string, string> }>({ of: "", code: "", problems: [], files: {} });
+  createEffect(
+    () => props.source,
+    (source) => {
+      solidToRx(source).then((r) => props.source === source && setOut({ of: source, ...r }));
+    },
+  );
+  const current = () => out().of === props.source;
+  const rx = () => (current() ? out().code : "");
+  const problems = () => (current() ? out().problems : []);
+  const helpers = () => Object.entries(current() ? out().files : {});
+  // the checker's word on the .rx, with the declaration files of the program in the other mode
+  const checked = createMemo(() => (props.ready && rx() && !problems().length ? compile({ ...props.files, ...out().files, "main.rx": rx() }, "dom") : undefined));
+  const diagnostics = () => (checked()?.diagnostics ?? []).filter((d) => d.file === ENTRY);
+  const html = createMemo(() => {
+    const bad = new Set(problems().map((p) => p.line));
+    return props.source
+      .split("\n")
+      .map((l, i) => `<span class="eline${bad.has(i + 1) ? " bad" : ""}">${highlight(l, "javascript") || " "}</span>`)
+      .join("\n");
+  });
+  let textarea!: HTMLTextAreaElement;
+  const goTo = (line: number) => {
+    const start = lineCol(props.source, line, 0);
+    textarea.focus();
+    textarea.setSelectionRange(start, lineCol(props.source, line + 1, 0) - 1);
+  };
+  return (
+    <main class="grid" hidden={props.hidden}>
+      <section class="pane editor-pane">
+        <div class="tabs">
+          <span class="tab on">
+            <button type="button">App.tsx</button>
+          </span>
+        </div>
+        <Editor value={props.source} html={html()} onChange={props.onChange} testid="solid-editor" ref={(el) => (textarea = el)} />
+        <div class="diags" data-testid="rx-problems">
+          <div class="label">
+            Not converted <span class={`count${problems().length ? " bad" : ""}`}>{problems().length}</span>
+          </div>
+          <Show when={problems().length} fallback={<p class="ok">{current() ? "Every form here has an .rx reading." : ""}</p>}>
+            <ul>
+              <For each={problems()} keyed={false}>
+                {(p) => (
+                  <li>
+                    <button type="button" class="where" onClick={() => goTo(p().line)}>
+                      App.tsx:{p().line}
+                    </button>
+                    <span class="msg">{p().message}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </div>
+      </section>
+
+      <section class="pane out-pane">
+        <div class="out-head">
+          <span class="label">ReactiveScript</span>
+          <span class="hint">the same program as .rx; a prototype that lists what it cannot read</span>
+          <span class="spacer" />
+          <button type="button" class="btn" data-testid="use-rx" disabled={!rx() || problems().length > 0} onClick={() => props.onUse(rx(), out().files)}>
+            Edit as .rx
+          </button>
+        </div>
+        <Show when={problems().length}>
+          <p class="stale-note">Some of this has no .rx form yet, so the result is incomplete.</p>
+        </Show>
+        <div class="output">
+          <pre class="code" data-testid="rx-out" innerHTML={highlightRx(rx())} />
+          <For each={helpers()}>
+            {([name, code]) => (
+              <div class="explain" data-testid="rx-helpers">
+                <div class="label">
+                  {name} <span class="hint">plain TypeScript stays TypeScript; the .rx imports it</span>
+                </div>
+                <pre class="code helper" innerHTML={highlight(code, "javascript")} />
+              </div>
+            )}
+          </For>
+          <Show when={checked()}>
+            <div class="explain" data-testid="rx-check">
+              <div class="label">
+                The checker on this .rx <span class={`count${diagnostics().length ? " bad" : ""}`}>{diagnostics().length}</span>
+              </div>
+              <Show when={diagnostics().length} fallback={<p class="ok">The checker accepts it.</p>}>
+                <ul class="checks">
+                  <For each={diagnostics()} keyed={false}>
+                    {(d) => (
+                      <li>
+                        <span class="where">main.rx:{d().line ?? "?"}</span>
+                        <a class="code" href={`${GUIDE}#${d().code.toLowerCase()}`} target="_blank" rel="noopener">
+                          {d().code}
+                        </a>
+                        <span class="rule">[{d().rule}]</span>
+                        <span class="msg">{d().message}</span>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+            </div>
+          </Show>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -49,6 +208,8 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
   const [preset, setPreset] = createSignal(props.initial.preset ?? "");
   const [copied, setCopied] = createSignal("");
   const [explain, setExplain] = createSignal(true);
+  const [mode, setMode] = createSignal<"rx" | "solid">("rx");
+  const [solidSource, setSolidSource] = createSignal("");
 
   // "loading", "ready", or why the compiler did not load
   const [compiler, setCompiler] = createSignal("loading");
@@ -102,7 +263,6 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
   });
 
   let textarea!: HTMLTextAreaElement;
-  let backdrop!: HTMLPreElement;
 
   const update = (value: string) => {
     setFiles({ ...files(), [active()]: value });
@@ -114,6 +274,20 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     setFiles({ ...p.files });
     setActive("main.rx");
     setPreset(id);
+    setMode("rx");
+  };
+  const toggleMode = () => {
+    // the other way starts from this program's Solid view, the entry module's
+    if (mode() === "rx") setSolidSource(shown().split(/\n\/\/ \/[^\n]*\n/)[0] || SAMPLE_SOLID);
+    setMode(mode() === "rx" ? "solid" : "rx");
+  };
+  const useRx = (rx: string, extra: Record<string, string>) => {
+    const next: Record<string, string> = { ...files(), ...extra, "main.rx": rx };
+    if (!(HELPERS in extra)) delete next[HELPERS];
+    setFiles(next);
+    setActive("main.rx");
+    setPreset("");
+    setMode("rx");
   };
   const goTo = (d: Diagnostic) => {
     const name = d.file.replace(/^\//, "");
@@ -161,19 +335,6 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     },
   );
 
-  const syncScroll = () => {
-    backdrop.scrollTop = textarea.scrollTop;
-    backdrop.scrollLeft = textarea.scrollLeft;
-  };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Tab" && !e.shiftKey) {
-      e.preventDefault();
-      const { selectionStart: s, selectionEnd: end, value } = textarea;
-      update(value.slice(0, s) + "  " + value.slice(end));
-      queueMicrotask(() => textarea.setSelectionRange(s + 2, s + 2));
-    }
-  };
-
   return (
     <div class="shell">
       <header class="bar">
@@ -192,6 +353,9 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
             <For each={presets}>{(p) => <option value={p.id}>{p.title}</option>}</For>
           </select>
         </label>
+        <button type="button" class="btn" data-testid="mode" onClick={toggleMode}>
+          {mode() === "rx" ? "Solid → .rx" : ".rx → Solid"}
+        </button>
         <span class="spacer" />
         <span class="ms" data-testid="ms">
           {ready() ? `${result().ms.toFixed(1)} ms` : ""}
@@ -201,11 +365,12 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
         </button>
       </header>
 
-      <Show when={presets.find((p) => p.id === preset())}>
-        {(p) => <p class="blurb">{p().blurb}</p>}
+      <Show when={mode() === "rx"} fallback={<p class="blurb">Paste Solid 2.0 on the left to read it as ReactiveScript. The compiler then checks the result.</p>}>
+        <Show when={presets.find((p) => p.id === preset())}>{(p) => <p class="blurb">{p().blurb}</p>}</Show>
       </Show>
 
-      <main class="grid">
+      <FromSolid source={solidSource()} onChange={setSolidSource} files={files()} ready={ready()} hidden={mode() !== "solid"} onUse={useRx} />
+      <main class="grid" hidden={mode() !== "rx"}>
         <section class="pane editor-pane">
           <div class="tabs">
             <For each={Object.keys(files())}>
@@ -226,20 +391,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
               +
             </button>
           </div>
-          <div class="editor">
-            <pre class="backdrop" aria-hidden="true" ref={backdrop} innerHTML={editLines() + "\n"} />
-            <textarea
-              ref={textarea}
-              data-testid="editor"
-              spellcheck={false}
-              autocapitalize="off"
-              autocomplete="off"
-              value={text()}
-              onInput={(e) => update(e.currentTarget.value)}
-              onScroll={syncScroll}
-              onKeyDown={onKey}
-            />
-          </div>
+          <Editor value={text()} html={editLines()} onChange={update} testid="editor" ref={(el) => (textarea = el)} />
           <div class="diags" data-testid="diagnostics">
             <div class="label">
               Diagnostics <span class={`count${diagnostics().length ? " bad" : ""}`}>{diagnostics().length}</span>

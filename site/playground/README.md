@@ -24,6 +24,20 @@ The `app` request is new: `app::app_with` takes a reader in place of the disk, `
 The playground is not part of the deployed site: `site/.assetsignore` leaves `playground/` out of the static upload.
 Publishing it would need a build step (`pnpm wasm && pnpm build`) and its `dist/` served under `/playground/`.
 
+## Solid → .rx (prototype)
+
+The header's **Solid → .rx** button turns the page around: Solid 2.0 on the left, the same program as `.rx` on the
+right (`src/torx.ts`). It parses the Solid with the Babel parser Prettier already carries, reads the forms the Solid
+view produces (signals, memos, stores, keyed and draft projections, actions with guesses, `Show`, `For`, `Errored`,
+`Loading`, prop patterns), and lists everything else under "Not converted" with its line instead of guessing.
+Plain TypeScript beside a component (data, `async` functions, anything with statements) moves to `helpers.ts`, which
+the `.rx` imports; a call to one of its `async` functions from reactive scope is written as an `await`. The
+compiler then checks the `.rx`, so a Solid program with, say, an await and no `Errored` boundary gets
+`UNHANDLED_FAILURE`.
+
+`pnpm test:torx` is the round trip: each example's `.rx` → Solid view → `.rx` → Solid view must give the same view,
+plus hand-written Solid that must convert and compile, or be refused with reasons.
+
 ## Run
 
 ```sh

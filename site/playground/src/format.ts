@@ -1,4 +1,5 @@
 import { solidify } from "./solidify";
+import { toRx, type RxProblem } from "./torx";
 
 let loaded: Promise<(code: string) => Promise<string>> | undefined;
 
@@ -54,4 +55,16 @@ export async function formatSolid(raw: string): Promise<{ code: string; error?: 
   } catch (e) {
     return { code: runtime, error: String((e as Error)?.message ?? e).split("\n")[0] };
   }
+}
+
+/** Solid 2.0 written back as .rx (`toRx`), over the Babel parser Prettier carries. */
+export async function solidToRx(code: string): Promise<{ code: string; problems: RxProblem[]; files: Record<string, string> }> {
+  const babel = await import("prettier/plugins/babel");
+  let ast;
+  try {
+    ast = (babel as any).parsers["babel-ts"].parse(code, {});
+  } catch (e: any) {
+    return { code: "", problems: [{ line: e?.loc?.start?.line ?? e?.loc?.line ?? 0, message: String(e?.message ?? e).split("\n")[0] }], files: {} };
+  }
+  return toRx(ast, code);
 }

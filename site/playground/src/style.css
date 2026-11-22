@@ -41,6 +41,7 @@ select { background: var(--panel); border: 1px solid var(--line); border-radius:
 .blurb { margin: 0; padding: 8px 16px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 14px; }
 
 .grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.grid[hidden] { display: none; }
 .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .editor-pane { border-right: 1px solid var(--line); }
 
@@ -96,6 +97,15 @@ pre.code { margin: 0; padding: 14px 16px; font: 13px/1.55 var(--mono); font-vari
 
 pre.err { margin: 8px 16px; padding: 10px 12px; border: 1px solid #5a2a33; background: #1d1626; color: var(--red); border-radius: 10px; white-space: pre-wrap; font: 12px/1.5 var(--mono); max-height: 160px; overflow: auto; }
 .diags pre.err { margin: 8px 0 0; }
+.checks { list-style: none; margin: 8px 0 0; padding: 0; }
+.checks li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.checks .where { color: var(--muted); font: 12px var(--mono); margin-right: 8px; }
+.checks .code { font: 600 12px var(--mono); color: var(--red); margin-right: 6px; }
+.checks .rule { font: 12px var(--mono); color: var(--amber); margin-right: 8px; }
+.checks .msg { display: block; margin-top: 2px; }
+.explain .ok { color: var(--green); margin: 8px 0 0; font-size: 14px; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+pre.code.helper { padding: 10px 0 0; }
 
 /* highlight.js tokens in the site's colours */
 .hljs-keyword, .hljs-built_in, .hljs-literal { color: var(--blue); }

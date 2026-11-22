@@ -7,7 +7,9 @@
     "build": "vite build",
     "preview": "vite preview --host --port 3020",
     "wasm": "sh scripts/build-wasm.sh",
-    "test": "node tests/playground.check.mjs"
+    "test": "node tests/playground.check.mjs",
+    "test:torx": "node tests/torx.check.mts",
+    "test:roundtrip": "node tests/roundtrip.check.mts"
   },
   "dependencies": {
     "@solidjs/web": "2.0.0-rc.21",

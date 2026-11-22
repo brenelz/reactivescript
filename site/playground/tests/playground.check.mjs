@@ -77,6 +77,14 @@ await check("a rest prop reads as omit, spread without a call", async () => {
   assert((await page.getByTestId("explain").innerText()).includes("omit"), "Explain does not list omit");
 });
 
+await check("an effect reads as createEffect, its inputs named $0 and $1", async () => {
+  await type(`import { report } from "./io"\nexport default component App() {\n  source count := 0\n  double = count * 2\n  effect (count, double) {\n    report($0, $1)\n    return () => { report("cleanup") }\n  }\n  effect () {\n    report("mounted")\n  }\n  <p>{count}</p>\n}\n`);
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  assert(text.includes("() => [count(), double()], ([$0, $1]) => { report($0, $1); return () => { report(\"cleanup\"); }; }"), `no createEffect over two inputs:\n${text}`);
+  assert(text.includes("createEffect(() => {}, () => report(\"mounted\"))"), `no createEffect without inputs:\n${text}`);
+  assert(!text.includes("__rt") && !text.includes("$p"), `the runtime's effect is still there:\n${text}`);
+});
+
 await check("the projection example reads as createProjection, keyed and draft", async () => {
   await page.getByTestId("example").selectOption("projection");
   await js.getByText("createProjection", { exact: false }).first().waitFor({ timeout: 5000 });
@@ -156,6 +164,34 @@ await check("a program of two .rx modules shows both, and adding a file is kept 
   assert(!(await page.getByTestId("solid-error").count()), await page.getByTestId("solid-error").innerText().catch(() => ""));
   await page.waitForTimeout(500);
   assert(page.url().includes("#code="), `the added file is not in the URL: ${page.url()}`);
+});
+
+await check("Solid → .rx reads the Solid view back as .rx, lists what it cannot read, and hands the .rx to the editor", async () => {
+  await page.getByTestId("example").selectOption("await");
+  await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
+  await page.getByTestId("mode").click();
+  const out = page.getByTestId("rx-out");
+  await out.getByText("fetchUser", { exact: false }).first().waitFor({ timeout: 5000 });
+  let rx = await out.innerText();
+  assert(rx.includes("label = (await fetchUser(id)).name + suffix") && rx.includes("{errored fallback(e) {"), `not the await example:\n${rx}`);
+  assert((await page.getByTestId("rx-check").innerText()).includes("The checker accepts it."), "the checker does not accept the .rx");
+  const solidEditor = page.getByTestId("solid-editor");
+  await solidEditor.fill(`import { createSignal, createRenderEffect } from "solid-js";\nexport default function App() {\n  const [n, setN] = createSignal(0);\n  createRenderEffect(() => n(), (v) => console.log(v));\n  return <p onClick={() => setN(n() + 1)}>{n()}</p>;\n}\n`);
+  await page.getByTestId("rx-problems").getByText("render effect", { exact: false }).first().waitFor({ timeout: 5000 });
+  assert(await page.getByTestId("use-rx").isDisabled(), "an incomplete result can be opened in the editor");
+  await solidEditor.fill(`import { createSignal, createMemo } from "solid-js";\nexport default function Counter() {\n  const [count, setCount] = createSignal(0);\n  const doubled = createMemo(() => count() * 2);\n  return <button onClick={() => setCount(count() + 1)}>{doubled()}</button>;\n}\n`);
+  await out.getByText("doubled = count * 2", { exact: false }).first().waitFor({ timeout: 5000 });
+  // plain TypeScript beside the component moves to helpers.ts, and comes along into the editor
+  await solidEditor.fill(`import { createMemo } from "solid-js";\nconst wait = (ms) => new Promise((r) => setTimeout(r, ms));\nconst load = async () => (await wait(10), ["a"]);\nfunction App() {\n  const items = createMemo(load);\n  return <p>{items().length}</p>;\n}\n`);
+  await out.getByText("items = await load()", { exact: false }).first().waitFor({ timeout: 5000 });
+  assert((await page.getByTestId("rx-helpers").innerText()).includes("export const load = async"), "no helpers.ts");
+  assert((await page.getByTestId("rx-check").innerText()).includes("UNHANDLED_FAILURE"), "the checker does not ask for a boundary");
+  await solidEditor.fill(`import { createSignal, createMemo } from "solid-js";\nexport default function Counter() {\n  const [count, setCount] = createSignal(0);\n  const doubled = createMemo(() => count() * 2);\n  return <button onClick={() => setCount(count() + 1)}>{doubled()}</button>;\n}\n`);
+  await out.getByText("doubled = count * 2", { exact: false }).first().waitFor({ timeout: 5000 });
+  await page.getByTestId("use-rx").click();
+  rx = await editor.inputValue();
+  assert(rx.includes("source count := 0") && rx.includes("onClick={() => { count := count + 1 }}"), `the editor did not get the .rx:\n${rx}`);
+  await js.getByText("const doubled = createMemo", { exact: false }).first().waitFor({ timeout: 5000 });
 });
 
 await check("no uncaught page errors", async () => {
