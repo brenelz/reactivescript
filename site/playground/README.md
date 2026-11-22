@@ -38,6 +38,15 @@ compiler then checks the `.rx`, so a Solid program with, say, an await and no `E
 `pnpm test:torx` is the round trip: each example's `.rx` → Solid view → `.rx` → Solid view must give the same view,
 plus hand-written Solid that must convert and compile, or be refused with reasons.
 
+## Open in Solid Playground
+
+The Solid view is a reading aid, but for most programs it is also Solid that runs. The button over it opens
+playground.solidjs.com with the view as `main.tsx` (mounted with `render()`), the program's plain modules as tabs, and
+the compiler's scoped CSS injected (`src/solidplay.ts`). The tabs travel in the URL hash, the way that playground
+imports them. There is no link, and a tooltip says why, when the view still needs the compiler's runtime or imports a
+module the program has no file for. The `await` and `action` examples carry `users.js` and `names.js` beside their
+`.d.rx` declarations for this.
+
 ## Types on hover, and completion
 
 Both editors answer two questions from TypeScript's language service, which runs in a Web Worker
