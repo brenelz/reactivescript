@@ -16,6 +16,7 @@ export const SOLID_PRIMS: Record<string, string> = {
   latest: "latest x (R-12)",
   isPending: "pending? x (R-9)",
   onFlush: "onFlush(() => { … }) (EF-8)",
+  createEffect: "effect (a, b) { … }: the inputs it runs for, then what it does with them ($0, $1) (EF-1)",
   onSettled: "onSettled (EF-7)",
   until: "until (AC-6)",
   Errored: "errored fallback(e) { … } { … } (R-f-4)",
@@ -43,7 +44,7 @@ export function noteFor(line: string): Note | undefined {
   let m: RegExpExecArray | null;
   if ((m = /const \[(\w+)\$truth, set\w+\] = createSignal\((.*)$/.exec(line)))
     return { helper: "createSignal", name: m[1], reads: reads(m[2], m[1]), text: `source ${m[1]} = …: its answer, the truth a guess reverts to` };
-  if ((m = /const \[(\w+), guess\w+\] = createOptimistic\(/.exec(line)))
+  if ((m = /const \[(\w+), setOptimistic\w+\] = createOptimistic\(/.exec(line)))
     return { helper: "createOptimistic", name: m[1], reads: [], text: `source ${m[1]} as shown: \`guess ${m[1]} := v\` writes over the truth (AC-3)` };
   if ((m = /const \[(\w+), set\w+\] = createSignal\((.*)$/.exec(line)))
     return { helper: "createSignal", name: m[1], reads: reads(m[2], m[1]), text: /^\(\) =>/.test(m[2]) ? `source ${m[1]} = …: a source with a question (ST-5)` : `source ${m[1]} := … (ST-1)` };
@@ -61,12 +62,13 @@ export function noteFor(line: string): Note | undefined {
     return { helper: "createMemo", name: m[1], reads: reads(m[2], ""), text: `the await in ${m[1]}, hoisted to its own memo (R-1)` };
   if ((m = /const (\w+) = createMemo\((.*)$/.exec(line))) return { helper: "createMemo", name: m[1], reads: reads(m[2], m[1]), text: `equation ${m[1]} = … (E-1)` };
   if ((m = /const (\w+) = action\(/.exec(line))) return { helper: "action", name: m[1], reads: [], text: `action ${m[1]}(…): its body is one change; each await is a yield (AC-1)` };
-  if ((m = /^\s*guess(\w)(\w*)\(/.exec(line))) {
+  if ((m = /^\s*setOptimistic(\w)(\w*)\(/.exec(line))) {
     const n = m[1].toLowerCase() + m[2];
     return { helper: "guess", name: n, reads: [], text: `guess ${n} := …: shows now, reverts if the action fails` };
   }
   if ((m = /^\s*affects\((\w+)\)/.exec(line))) return { helper: "affects", name: m[1], reads: [], text: `affects ${m[1]}: pending? ${m[1]} is true while the action runs` };
   if (/^\s*onFlush\(/.test(line)) return { helper: "onFlush", reads: [], text: "lands now, in its own instant (EF-8)" };
+  if (/^\s*createEffect\(/.test(line)) return { helper: "createEffect", reads: [], text: "effect (…) { … }: runs when an input's value changes; a returned function is its cleanup (EF-2, EF-5)" };
   if ((m = /^\s*<(Errored|Loading|Show|For)\b/.exec(line))) return { helper: m[1], reads: [], text: SOLID_PRIMS[m[1]] };
   if ((m = /\bset(\w)(\w*)\((untrack|latest)\(/.exec(line)))
     return { helper: m[3], reads: [], text: m[3] === "latest" ? "latest x: the newest value, even while held (R-12)" : `a read in a handler is a snapshot (H-10)` };

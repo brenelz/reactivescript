@@ -74,7 +74,8 @@ function eachCall(code: string, name: string, f: (a: string[], start: number) =>
   let out = "";
   let from = 0;
   for (let i = code.indexOf(name + "(", from); i >= 0; i = code.indexOf(name + "(", from)) {
-    if (/[\w$.]/.test(code[i - 1] ?? "")) {
+    // a member call is not this one; a spread's `...` is not a member access
+    if (/[\w$]/.test(code[i - 1] ?? "") || (code[i - 1] === "." && code.slice(i - 3, i) !== "...")) {
       out += code.slice(from, i + name.length);
       from = i + name.length;
       continue;
@@ -86,6 +87,54 @@ function eachCall(code: string, name: string, f: (a: string[], start: number) =>
     from = end;
   }
   return out + code.slice(from);
+}
+
+/** The index just past the JSX element whose `<` is at `i`, or -1 if it is not one. */
+function elementEnd(code: string, i: number): number {
+  const open = /^<([A-Za-z][\w.$-]*)/.exec(code.slice(i));
+  if (!open) return -1;
+  let depth = 0;
+  for (let j = i; j < code.length; j++) {
+    const c = code[j];
+    if (c === "{") {
+      j = close(code, j) - 1;
+      continue;
+    }
+    if (c !== "<") continue;
+    const tag = /^<(\/?)([A-Za-z][\w.$-]*)?/.exec(code.slice(j))!;
+    if (tag[1] === "/") {
+      if (!tag[2] && code.slice(j, j + 3) === "</>") return -1;
+      depth--;
+      j = code.indexOf(">", j);
+      if (depth === 0) return j + 1;
+      continue;
+    }
+    if (!tag[2]) return -1;
+    // the rest of the tag: attributes with their expressions, up to `>` or `/>`
+    let k = j + tag[0].length;
+    for (; k < code.length && code[k] !== ">"; k++) {
+      if (code[k] === "{") k = close(code, k) - 1;
+      else if (code[k] === '"' || code[k] === "'") k = code.indexOf(code[k], k + 1);
+    }
+    if (code[k - 1] === "/") {
+      if (depth === 0) return k + 1;
+    } else depth++;
+    j = k;
+  }
+  return -1;
+}
+/** `open X close` → `X` where X is one JSX element and `keep(at)` allows it. */
+function unwrapOne(code: string, open: string, closer: string, keep: (code: string, at: number) => boolean): string {
+  for (let i = code.indexOf(open); i >= 0; i = code.indexOf(open, i + 1)) {
+    const start = i + open.length + (/^\s*/.exec(code.slice(i + open.length))![0].length);
+    if (code[start] !== "<" || code[start + 1] === ">" || code[start + 1] === "/") continue;
+    const end = elementEnd(code, start);
+    if (end < 0) continue;
+    const rest = /^\s*/.exec(code.slice(end))![0].length;
+    if (code.slice(end + rest, end + rest + closer.length) !== closer || !keep(code, i)) continue;
+    code = code.slice(0, i) + code.slice(start, end) + code.slice(end + rest + closer.length);
+  }
+  return code;
 }
 
 /** `(X)` → `X` when the parentheses wrap all of it. */
@@ -140,7 +189,7 @@ export function solidify(code: string): string {
     used.add("createSignal");
     return `createSignal(${f}${o})`;
   });
-  // `const [v$x, w$x] = createSignal(fn)` with a guess: `const [x$truth, setX] = …; const [x, guessX] = createOptimistic(…)`
+  // `const [v$x, w$x] = createSignal(fn)` with a guess: `const [x$truth, setX] = …; const [x, setOptimisticX] = createOptimistic(…)`
   for (const name of optimistic) {
     const decl = `const [v$${name}, w$${name}] = createSignal(`;
     const i = code.indexOf(decl);
@@ -149,7 +198,7 @@ export function solidify(code: string): string {
     const semi = code[end] === ";" ? end + 1 : end;
     const ind = /[ \t]*$/.exec(code.slice(0, i))![0];
     const call = code.slice(i + decl.length - "createSignal(".length, end);
-    code = code.slice(0, i) + `const [${name}$truth, set${cap(name)}] = ${call};\n${ind}const [${name}, guess${cap(name)}] = createOptimistic(() => ${name}$truth());` + code.slice(semi);
+    code = code.slice(0, i) + `const [${name}$truth, set${cap(name)}] = ${call};\n${ind}const [${name}, setOptimistic${cap(name)}] = createOptimistic(() => ${name}$truth());` + code.slice(semi);
   }
 
   // `x key k = e` (ST-4): the answer as a memo, and a projection over it that keeps each row by its key
@@ -175,7 +224,10 @@ export function solidify(code: string): string {
   }
   // a draft write: `{ let __t = d; __t[k] = v; }` is `d[k] = v;`
   code = code.replace(/\{\s*let __t = ([\w$]+);\s*__t((?:\[[^\n]*?\]|\.\w+)+) = ([^;\n]+);\s*\}/g, "$1$2 = $3;");
-  code = code.replace(/\b__B\.str\(/g, "String(");
+  // Prettier breaks a long chain after `__rt`: join it back, so each helper is found by its name
+  code = code.replace(/\b__rt\s+\./g, "__rt.");
+  // a template part and `str` format alike
+  code = code.replace(/\b__B\.str\(|\b__rt\.fmt\(/g, "String(");
 
   code = eachCall(code, "__rt.memo", (a) => {
     // `...rest` in a prop pattern: Solid's omit is already a live view of props, so the memo around it adds nothing
@@ -196,6 +248,22 @@ export function solidify(code: string): string {
   code = eachCall(code, "__rt.snapshot", (a) => (used.add("untrack"), `untrack(${a[0]})`));
   code = eachCall(code, "__rt.refresh", (a) => (used.add("refresh"), `refresh(${a[1]})`));
   code = eachCall(code, "__rt.scopedClass", (a) => `[${a[0]}, ${a[1]}]`);
+  // `__rt.effect(n, () => [a(), b()], ($p) => untrack(() => { … $p[0] … }))` (EF-1): Solid's createEffect, whose
+  // second function is not tracked and takes what the first returned, here named as the .rx names them
+  code = eachCall(code, "__rt.effect", (a) => {
+    const n = Number(a[0]);
+    const apply = /^\(\$p\)\s*=>\s*(?:__rt\.)?untrack\(/.exec(a[2] ?? "");
+    const list = a[1]?.indexOf("[") ?? -1;
+    if (!apply || list < 0 || !Number.isInteger(n)) return undefined;
+    const inner = args(a[2], apply[0].length - 1).list[0] ?? "";
+    const body = /^\(\)\s*=>\s*([\s\S]*)$/.exec(inner);
+    if (!body) return undefined;
+    const inputs = args(a[1], list).list;
+    const read = n === 0 ? "() => {}" : n === 1 ? `() => ${inputs[0]}` : `() => [${inputs.join(", ")}]`;
+    const params = n === 0 ? "()" : n === 1 ? "($0)" : `([${inputs.map((_, i) => `$${i}`).join(", ")}])`;
+    used.add("createEffect");
+    return `createEffect(${read}, ${params} => ${body[1].replace(/\$p\[(\d+)\]/g, "$$$1")})`;
+  });
   for (const h of ["untrack", "latest", "isPending", "affects", "onFlush", "onSettled", "until", "action"])
     code = code.replace(new RegExp(`__rt\\.${h}\\(`, "g"), () => (used.add(h), `${h}(`));
 
@@ -208,25 +276,46 @@ export function solidify(code: string): string {
     if (m && !/^\s*\(?\s*$/.test(m[1])) code = code.slice(0, i) + unparen(m[1]) + code.slice(bodyEnd + 3);
   }
 
-  // `=> { return X; }` is `=> X`
-  for (let i = code.indexOf("=> {"); i >= 0; i = code.indexOf("=> {", i + 1)) {
-    const bodyOpen = i + 3;
-    const bodyEnd = close(code, bodyOpen);
-    const m = /^\{\s*return ([\s\S]*);\s*\}$/.exec(code.slice(bodyOpen, bodyEnd));
-    if (m && !/^\s*\(?\s*$/.test(m[1]) && !/\breturn\b/.test(m[1])) {
-      const x = unparen(m[1]);
-      code = code.slice(0, bodyOpen) + (x.startsWith("{") ? `(${x})` : x) + code.slice(bodyEnd);
+  // `=> { return X; }` is `=> X`: innermost first, so again until an outer one has no return left inside it
+  for (let before = ""; before !== code; ) {
+    before = code;
+    for (let i = code.indexOf("=> {"); i >= 0; i = code.indexOf("=> {", i + 1)) {
+      const bodyOpen = i + 3;
+      const bodyEnd = close(code, bodyOpen);
+      const m = /^\{\s*return ([\s\S]*);\s*\}$/.exec(code.slice(bodyOpen, bodyEnd));
+      if (m && !/^\s*\(?\s*$/.test(m[1]) && !/\breturn\b/.test(m[1])) {
+        const x = unparen(m[1]);
+        code = code.slice(0, bodyOpen) + (x.startsWith("{") ? `(${x})` : x) + code.slice(bodyEnd);
+      }
     }
   }
+  // `{if x { … x … }}` narrows x: the branch's `n$x` is x again
+  code = code.replace(/^[ \t]*const n\$([\w$]+) = __item;\n/gm, "");
+  code = inCode(code, (part) => part.replace(/\bn\$([\w$]+)\b/g, "$1"));
   // a branch's unused item parameter: `{(__item) => X}` is `{X}`
   for (let i = code.indexOf("(__item) => "); i >= 0; i = code.indexOf("(__item) => ", i + 1)) {
     const body = i + "(__item) => ".length;
     const end = "([{".includes(code[body]) ? close(code, body) : code.indexOf("\n", body);
-    if (!/\b__item\b/.test(code.slice(body, end < 0 ? undefined : end))) code = code.slice(0, i) + code.slice(body);
+    // a block body stays a function: `{{ … }}` is not JSX
+    if (code[body] !== "{" && !/\b__item\b/.test(code.slice(body, end < 0 ? undefined : end))) code = code.slice(0, i) + code.slice(body);
   }
 
   // writers and names
-  for (const name of optimistic) code = code.replace(new RegExp(`w\\$${name}\\.guess\\(`, "g"), `guess${cap(name)}(`);
+  for (const name of optimistic) code = code.replace(new RegExp(`w\\$${name}\\.guess\\(`, "g"), `setOptimistic${cap(name)}(`);
+  // a store's writer, as Solid's setter takes it: a function that changes its draft. A guess on an optimistic store is
+  // that same setter
+  const along = (name: string, keys: string, value: string) => {
+    const target = "draft" + args(keys, 0).list.map((k) => (/^"[A-Za-z_$][\w$]*"$/.test(k) ? `.${k.slice(1, -1)}` : `[${k}]`)).join("");
+    return `w$${name}.set((draft) => {\n${target} = ${/^(\([\w$]*\)|[\w$]+)\s*=>/.test(value) ? `(${value})(${target})` : value};\n})`;
+  };
+  for (const name of stores) {
+    code = eachCall(code, `w$${name}.path`, (a) => (a.length === 2 && a[0].startsWith("[") ? along(name, a[0], a[1]) : undefined));
+    code = eachCall(code, `w$${name}.guess`, (a) => {
+      if (a.length === 2 && a[1].startsWith("[")) return along(name, a[1], a[0]);
+      if (a.length !== 1) return undefined;
+      return `w$${name}.set(${/^(\([\w$]*\)|[\w$]+)\s*=>/.test(a[0]) ? a[0] : `() => ${a[0].startsWith("{") ? `(${a[0]})` : a[0]}`})`;
+    });
+  }
   code = inCode(code, (part) =>
     part
       .replace(/\bw\$(\w+)\.set\(/g, (_, n) => `set${cap(n)}(`)
@@ -252,8 +341,35 @@ export function solidify(code: string): string {
   // a fragment around one element, or braces around one element, says nothing
   for (let before = ""; before !== code; ) {
     before = code;
-    code = code.replace(/<>\s*(<(\w[\w.$]*)\b(?:[^<]|<(?!\/?>))*?<\/\2>|<\w[\w.$]*\b[^<>]*\/>)\s*<\/>/g, "$1");
-    code = code.replace(/\{\s*(<(\w[\w.$]*)\b(?:[^<]|<(?!\/?>))*?<\/\2>)\s*\}/g, (all, el, tag, at, str) => (/[>}]\s*$/.test(str.slice(0, at)) ? el : all));
+    code = unwrapOne(code, "<>", "</>", () => true);
+    code = unwrapOne(code, "{", "}", (now, at) => /[>}]\s*$/.test(now.slice(0, at)));
+  }
+
+  // another module's names: `import __m0 from "./x.rx"` + `const __i0 = __rt.module(__m0, __m0); const A = __i0["B"];`
+  for (const m of [...code.matchAll(/^import (__m\d+) from ("[^"]+");\n/gm)]) {
+    const inst = new RegExp(`^[ \\t]*const (__i\\d+) = __rt\\.module\\(${m[1]}, ${m[1]}\\);\\n`, "m").exec(code);
+    if (!inst) continue;
+    const names: string[] = [];
+    code = code.replace(new RegExp(`^[ \\t]*const ([\\w$]+) = ${inst[1]}\\["([\\w$]+)"\\];\\n`, "gm"), (_, local, name) => (names.push(local === name ? name : `${name} as ${local}`), ""));
+    code = code.replace(inst[0], "").replace(m[0], names.length ? `import { ${names.join(", ")} } from ${m[2]};\n` : "");
+  }
+  // a module named ./api is the app's server: `const x = __rt.api("x")` is a name imported from it
+  const api: string[] = [];
+  code = code.replace(/^[ \t]*const ([\w$]+) = __rt\.api\("([\w$]+)"\);\n/gm, (_, local, name) => (api.push(local === name ? name : `${name} as ${local}`), ""));
+  if (api.length) code = `import { ${api.join(", ")} } from "./api";\n` + code;
+  // .rx's builtins (len, str, fetch, …) are names of their own, not JavaScript's
+  code = code.replace(/\b__B\.(\w+)\b/g, "$1");
+  // `const len = __B.len` named a builtin for the module: with __B gone it would read itself
+  code = code.replace(/^[ \t]*const ([\w$]+) = \1;\n/gm, "");
+  // a module that is not the entry: its setup is the module's top level, and what it returns is what it exports
+  const mod = /export default function module\(__rt\) \{\s*(?:const __B = __rt\.B;\s*)?([\s\S]*?)\breturn \{([^{}]*)\};\s*\}\s*$/.exec(code);
+  if (mod && !/__rt\b/.test(mod[1])) {
+    let body = mod[1].replace(/^\t/gm, "");
+    for (const [, key, value] of mod[2].matchAll(/([\w$]+):\s*([\w$]+)/g)) {
+      if (key !== value) continue;
+      body = body.replace(new RegExp(`^(function|const|let) (\\[?${key}\\b)`, "m"), "export $1 $2");
+    }
+    code = code.slice(0, mod.index) + body;
   }
 
   // the app wrapper, when nothing in it needs the runtime any more
