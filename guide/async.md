@@ -46,6 +46,8 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
   show the fallback again each time a key changes (a new selection, not a refinement), use `loading on(selected)`.
 - An answer read outside the region that loads it (elsewhere on the page, a count, a button's `disabled`) needs a
   value before it lands, or every one of those readers waits with it, and so does every reader of a store over it.
+  That includes another answer's region: a pane that borrows other lists (for a limit, a count, or to find where a row
+  is) shows its `loading` until every list it borrows has answered, though its own landed long ago.
   Give the answer its value where it's declared, and lay the store over it:
 
   ```rx
