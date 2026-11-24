@@ -258,6 +258,12 @@ local state: typing, toggles, selection.
 
 A run never sees its own writes: after `x := v`, reading `x` in the same run gives the old value (W-4), and the
 compiler refuses it (`STALE_OWN_READ`). Keep the value in a local: `let n = count + 1; count := n; log(n)`.
+That local fixes this run only. A handler that calls an action joins its change, so its plain writes wait with the
+action, and until it settles the next click reads the old value too: a counter that mints ids gives the same id twice.
+Read the value the next run builds on with `latest`, which sees a write still waiting (not this run's own):
+`let n = latest seq + 1; seq := n; add(n)`. If the run doesn't need the value, a functional write does the same
+(`seq := v => v + 1`). If the write should show now instead (a reset), give it its own instant with `onFlush`. The
+compiler flags the plain read (`STALE_NEXT_READ`).
 
 ## 6. Effects: acting on a value as it changes
 

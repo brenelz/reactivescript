@@ -8,7 +8,7 @@
 
 use crate::ast::*;
 use crate::content::{misnested, misnested_inside, Shape, P_CLOSERS, P_SCOPE};
-use crate::infer::{inferred_action, run_findings, scalar_type, trigger_text, Code, RunOpts};
+use crate::infer::{action_waits, inferred_action, run_findings, scalar_type, trigger_text, Code, RunOpts};
 use crate::model::{ModelBuilder, ModelSymbol};
 use crate::modules::ModuleSet;
 use crate::parse::{js_trim, JsDecl, Part, Shape as FShape};
@@ -245,6 +245,8 @@ struct Sym<'a> {
     reader: bool,
     /// an action declared here: how many arguments a call passes (AC-1f)
     arity: Option<usize>,
+    /// an action declared here: whether its change can outlast the call (an `await`, `refresh`, `affects`; AC-1h)
+    waits: Option<bool>,
     /// RG-4b: the props of `component C()`, which declares none — C's name: reading them is UNBOUND
     no_props: Option<String>,
 }
@@ -283,6 +285,7 @@ impl<'a> Sym<'a> {
             foreign: None,
             reader: false,
             arity: None,
+            waits: None,
             no_props: None,
         }
     }
@@ -1216,9 +1219,10 @@ impl<'a> Checker<'a> {
             match d {
                 Decl::Server { params, .. } => sym.params = Some(params.iter().map(|n| SigParam { name: n.clone(), r#ref: false, ty: None }).collect()),
                 Decl::Source { question, .. } => sym.question = *question,
-                Decl::Action { params, .. } => {
+                Decl::Action { params, body, .. } => {
                     sym.io = true; // R-io-2: an action is io
                     sym.arity = Some(params.len()); // AC-1f: its parameters
+                    sym.waits = Some(action_waits(body)); // AC-1h
                 }
                 Decl::Fn { params, decls: fdecls, .. } => {
                     sym.params = Some(params.iter().map(|p| SigParam { name: p.name.clone(), r#ref: p.r#ref, ty: p.ty.clone() }).collect());
@@ -1848,7 +1852,7 @@ impl<'a> Checker<'a> {
                 self.comp("action", env, Some(name.clone()), None, |c| c.stmts(body, inner, Ctx { in_action: true, ..Ctx::imperative() }));
                 self.actions.push(ActionRec { name: name.clone(), body, env: inner, line: *line as i64 });
                 let ptypes: Vec<Option<String>> = ptypes.iter().map(|t| t.as_ref().map(|t| if self.scalar_aliases.contains(t.trim()) { "string".to_string() } else { t.clone() })).collect();
-                self.run_checks_with(body, true, params, false, ptypes, Some(inner));
+                self.run_checks_with(body, true, params, false, ptypes, Some(inner), None);
             }
             Decl::Server { name, params, body, line, .. } => {
                 let region = self.reg(env);
@@ -2359,7 +2363,7 @@ impl<'a> Checker<'a> {
                         self.actions.push(ActionRec { name: format!("inferred here (AC-1b: {})", trigger_text(w)), body: ss, env: inner, line: self.line });
                     }
                     if !ctx.server {
-                        self.run_checks(ss, why.is_some(), params, why.is_some());
+                        self.run_checks_with(ss, why.is_some(), params, why.is_some(), vec![], None, Some(inner));
                     }
                     return;
                 }
@@ -2399,13 +2403,15 @@ impl<'a> Checker<'a> {
     // ---- imperative scope (SC-2) ----
     /// AC-1c, AC-1d, AC-1e over one imperative run (`crate::infer`).
     fn run_checks(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool) {
-        self.run_checks_with(stmts, action, bound, inferred, vec![], None);
+        self.run_checks_with(stmts, action, bound, inferred, vec![], None, None);
     }
     /// `answers_in`: a declared action's scope, where AC-1g asks which names are sources with a question.
-    fn run_checks_with(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, ptypes: Vec<Option<String>>, answers_in: Option<EId>) {
+    /// `actions_in`: an arrow's scope, where AC-1h asks which names are actions whose change can outlast the call.
+    fn run_checks_with(&mut self, stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, ptypes: Vec<Option<String>>, answers_in: Option<EId>, actions_in: Option<EId>) {
         let answered = |n: &str| answers_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Source && self.syms[t].question);
         let stateful = |n: &str| answers_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Source || self.syms[t].kind == SymKind::Eq);
-        let found = run_findings(stmts, action, bound, inferred, &RunOpts { ptypes, answered: if answers_in.is_some() { Some(&answered) } else { None }, stateful: if answers_in.is_some() { Some(&stateful) } else { None } });
+        let is_action = |n: &str| actions_in.and_then(|env| self.lookup(env, n)).map_or(false, |t| self.syms[t].kind == SymKind::Action && self.syms[t].waits != Some(false));
+        let found = run_findings(stmts, action, bound, inferred, &RunOpts { ptypes, answered: if answers_in.is_some() { Some(&answered) } else { None }, stateful: if answers_in.is_some() { Some(&stateful) } else { None }, is_action: if actions_in.is_some() { Some(&is_action) } else { None } });
         for f in found {
             let n = &f.name;
             match f.code {
@@ -2415,6 +2421,13 @@ impl<'a> Checker<'a> {
                 }
                 Code::HeldWrite => self.err("HELD_WRITE", "AC-1c", format!("{n} := … comes before an `await` in a body that is an action because it writes and awaits (AC-1b), so it is held until the body ends (AC-1): for state that shows while the work runs, `guess {n} := …` (a source with a question, ST-5c); for a reset that lands now, `onFlush(() => {{ {n} := … }})` (EF-8); to hold it on purpose, declare the action (`action name() {{ … }}`); or write it after the `await`")),
                 Code::StaleOwnRead => self.err("STALE_OWN_READ", "AC-1d", format!("{n} is read after this change wrote it: the read sees the committed value, not the write (W-4) — keep the value you wrote in a local (`let v = …; {n} := v`) and read that, or write functionally (`{n} := v => …`, W-6)")),
+                Code::StaleNextRead => {
+                    let held = match &f.via {
+                        Some(v) => format!("this run calls {v}, so its writes join that action's change"),
+                        None => "an action holds its writes".into(),
+                    };
+                    self.err("STALE_NEXT_READ", "AC-1h", format!("{n} := … is computed from {n}, and it is held: {held} until the change settles (AC-1). Until then the next run reads the committed {n}, not this write, and computes the same value again (a counter mints one id twice). For the next run to build on the held value while the screen waits, read it with `latest {n}` (R-9), or write functionally (`{n} := v => …`, W-6) when this run doesn't need the value; for the write to show now, give it its own instant, `onFlush(() => {{ {n} := … }})` (EF-8)"))
+                }
                 Code::StaleWriteBack => self.err("STALE_WRITE_BACK", "AC-1e", format!("{n} := … after an `await` is computed from {n} as it was read before that `await`: whatever changed {n} in between (another action, a reload) is overwritten — write functionally (`{n} := v => …`, W-6), which applies to {n} as it stands at the write, or guess it (`guess`, AC-3) and let the answer replace the guess")),
             }
         }

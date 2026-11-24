@@ -240,6 +240,40 @@ export default component App() {
 ```
 
 
+### STALE_NEXT_READ
+
+A handler that calls an action joins that action's change, and an action holds its writes until it settles, so a
+write computed from its own source (`seq := seq + 1`, or through a local) is held with it. Until then the next click
+reads the old value and computes the same one again: a counter that mints ids gives one id twice. Read it with
+`latest`, which sees a write still waiting, so the screen waits with the action and the next click builds on it (or
+write functionally, `seq := v => v + 1`, when the run doesn't need the value). If the write should show now, give it
+its own instant with `onFlush` instead.
+
+```rx before
+export default component App() {
+  source seq := 0
+  source cards := ""
+  action add(id: number) {
+    let r = await fetch("add") catch (e) => ""
+    cards := v => v + "/" + str(id)
+  }
+  <button onClick={() => { let n = seq + 1; seq := n; add(n) }}>{cards}</button>
+}
+```
+
+```rx after
+export default component App() {
+  source seq := 0
+  source cards := ""
+  action add(id: number) {
+    let r = await fetch("add") catch (e) => ""
+    cards := v => v + "/" + str(id)
+  }
+  <button onClick={() => { let n = latest seq + 1; seq := n; add(n) }}>{cards}</button>
+}
+```
+
+
 ### STALE_CAPTURE
 
 After an `await`, a write into a source with a question (the server's answer) takes only what the server answered,
