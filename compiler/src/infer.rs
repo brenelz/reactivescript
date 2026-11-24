@@ -253,6 +253,8 @@ struct Walker<'o> {
     next: Vec<String>,
     joins: Option<String>,
     local_actions: HashSet<String>,
+    /// AC-1h: sources this change read plainly (a functional write beside one still leaves that read stale)
+    seen: HashSet<String>,
 }
 impl<'o> Walker<'o> {
     /// AC-1h: a declared action's body before an `await`, or a plain run's stretch that calls an action by name, is held;
@@ -260,6 +262,7 @@ impl<'o> Walker<'o> {
     fn flush_next(&mut self, held: bool) {
         let next = std::mem::take(&mut self.next);
         let via = self.joins.take();
+        self.seen.clear();
         if held && !self.inferred {
             for n in next {
                 self.report_via(Code::StaleNextRead, n, via.clone());
@@ -298,8 +301,9 @@ impl<'o> Walker<'o> {
         };
         if let Some(k) = root {
             if st.written.get(&k).is_some_and(|ws| ws.iter().any(|w| overlaps(w, &path))) {
-                self.report(Code::StaleOwnRead, k);
+                self.report(Code::StaleOwnRead, k.clone());
             }
+            self.seen.insert(k);
             return;
         }
         if !std::ptr::eq(x, e) {
@@ -535,6 +539,8 @@ impl<'o> Walker<'o> {
                         } else if d.iter().any(|(dk, dp, ep)| *dk == k && (self.action || *ep == st.epoch) && overlaps(dp, &path)) {
                             self.next.push(k.clone());
                         }
+                    } else if matches!(s.k, StmtKind::Write { .. }) && self.seen.contains(&k) {
+                        self.next.push(k.clone()); // AC-1h: a functional write beside a plain read of its source
                     }
                     // AC-1g: the answer takes the server's answer, plain arguments and its own value at the write (the closure's
                     // argument): a row parameter, a local read from any source (before the `await` or after it), or a source
@@ -603,7 +609,7 @@ impl<'o> Walker<'o> {
 /// its awaits (AC-1); a plain run's change ends at each `await`. `inferred`: an action by AC-1b, the only kind HELD_WRITE
 /// applies to. `bound`: the run's parameters. Each finding once per name, in source order.
 pub fn run_findings(stmts: &[Stmt], action: bool, bound: &[String], inferred: bool, opts: &RunOpts) -> Vec<Finding> {
-    let mut w = Walker { out: vec![], said: HashSet::new(), action, inferred, answered: opts.answered, stateful: opts.stateful, is_action: opts.is_action, next: vec![], joins: None, local_actions: HashSet::new() };
+    let mut w = Walker { out: vec![], said: HashSet::new(), action, inferred, answered: opts.answered, stateful: opts.stateful, is_action: opts.is_action, next: vec![], joins: None, local_actions: HashSet::new(), seen: HashSet::new() };
     let sh: IndexSet<String> = bound.iter().cloned().collect();
     let mut taint: IndexMap<String, Vec<Dep>> = IndexMap::new();
     for (i, p) in bound.iter().enumerate() {

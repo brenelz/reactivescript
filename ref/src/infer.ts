@@ -83,8 +83,8 @@ export function runFindings(stmts: Stmt[], action: boolean, bound: string[] = []
   // AC-1h: plain writes computed from their own source, in a change that is held — a declared action's body before an
   // `await`, or a plain run's stretch that calls an action by name (it joins that action's change, AC-1). An inferred
   // action's are HELD_WRITE already.
-  let next: string[] = []; let joins: string | null = null; const localActions = new Set<string>();
-  const flushNext = (held: boolean) => { if (held && !inferred) next.forEach(n => report("STALE_NEXT_READ", n, joins ?? undefined)); next = []; joins = null; };
+  let next: string[] = []; let joins: string | null = null; let seen = new Set<string>(); const localActions = new Set<string>();   // seen: sources this change read plainly (a functional write beside one still leaves that read stale)
+  const flushNext = (held: boolean) => { if (held && !inferred) next.forEach(n => report("STALE_NEXT_READ", n, joins ?? undefined)); next = []; joins = null; seen = new Set(); };
   const walk = (ss: Stmt[], st: State, shadow: Set<string>, cl: Closures, depth: Set<Fn>): State => {
     const sh = new Set(shadow); const local = new Map(cl);
     const read = (e: Expr): void => {
@@ -93,6 +93,7 @@ export function runFindings(stmts: Stmt[], action: boolean, bound: string[] = []
       if ((x.k === "id" && !sh.has(x.name)) || x.k === "use") {
         const k = key(x.name, x.k === "use"); const ws = st.written.get(k);
         if (ws?.some(w => overlaps(w, path))) report("STALE_OWN_READ", k);
+        seen.add(k);
         return;
       }
       if (x !== e) { read(x); return; }
@@ -151,7 +152,7 @@ export function runFindings(stmts: Stmt[], action: boolean, bound: string[] = []
           const wpath = s.target.path.map(p => typeof p === "string" ? p : p.k === "lit" && typeof p.v === "string" ? p.v : "*");
           const back = s.k === "write" && s.e.k !== "fn" && deps(s.e).some(d => d.k === k && d.epoch < st.epoch && overlaps(d.path, wpath));
           if (back) report("STALE_WRITE_BACK", k);
-          else if (s.k === "write" && s.e.k !== "fn" && deps(s.e).some(d => d.k === k && (action || d.epoch === st.epoch) && overlaps(d.path, wpath))) next.push(k);
+          else if (s.k === "write" && (s.e.k === "fn" ? seen.has(k) : deps(s.e).some(d => d.k === k && (action || d.epoch === st.epoch) && overlaps(d.path, wpath)))) next.push(k);
           else if (s.k === "write" && st.epoch > 0 && !s.target.ctx && opts.answered?.(s.target.name)) {
             // the answer takes the server's answer, plain arguments and its own value at the write (the closure's argument):
             // a row parameter, a local read from any source (before the `await` or after it), or another source read here is not the server's

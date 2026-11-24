@@ -294,7 +294,9 @@ selected = draft(pre selected -> {}) { d[id] := true; d[prevId] := false }
   n })` (02 EF-8, S-infer-8). `latest` does not see this run's own write
   (W-4, AC-1d). Keys count as in AC-1d. Not checked: an inferred action's writes (HELD_WRITE, AC-1c,
   already reports them), a functional write (`x := v => …`, W-6; it reads
-  `x` as it stands at the write), a guess, a write not computed from its
+  `x` as it stands at the write) unless the same change also reads `x`
+  plainly (that read is the stale one: `let n = seq + 1; seq := v => v +
+  1; add(n)` still mints one id twice), a guess, a write not computed from its
   own source (a draft cleared, a flag set), a write after a declared
   action's last `await` (it lands as the action ends), a call of an action
   passed as a prop or parameter (the checker can't see it is one), and a

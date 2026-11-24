@@ -82,3 +82,21 @@ export default component App() {
 
 A declared action holds its writes until it settles, so a second click
 while the first waits reads `page` as `1` and goes to `2` again.
+
+```rx
+-- reject: STALE_NEXT_READ
+export default component App() {
+  source seq := 0
+  source cards := ""
+  action add(id: number) {
+    guess cards := v => v + "/" + str(id)
+    let r = await fetch("add" + str(id)) catch (e) => ""
+    cards := v => v + "/" + str(id)
+  }
+  <button onClick={() => { let n = seq + 1; seq := v => v + 1; add(n) }}>{seq}:{cards}</button>
+}
+```
+
+The functional write counts right, but `n` was read from the committed
+`seq`, so the second click still mints `1` again: a functional write
+beside a plain read of its source in a held change is the same error.
