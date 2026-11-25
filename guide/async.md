@@ -56,6 +56,8 @@ forecast = city == "" ? null : city.length < 3 ? throw TooShort(city) : await fe
   ```
 
   Its own `loading` region shows while `folderAns == null`; every other reader reads `messages` and never waits.
+  The `[]` is a stand-in, not an answer. A click that works something out from the list (where a row goes, whether
+  the list is full) would compute it from an empty list, so keep that control `disabled` while `folderAns == null`.
 
 ## 2. Failures: a region where they're read
 
@@ -132,7 +134,9 @@ guesses on them, as the server will make them:
 1. **Guess on every store the write shows in.** An edit is a path guess on its row (`guess issues[i].title := t`), at
    an index the handler works out from the screen and passes in. An add, a removal or a move is a function guess on
    each list it changes (`guess open := rs => moved(rs, m)`). A title shown in a list row and in a detail heading is
-   two guesses, one on each answer.
+   two guesses, one on each answer. A count that the write changes is guessed as a change (`done: c.done + 1`), not
+   set to a number worked out from what the screen showed: another write's guess may be in that number, and the
+   count stays wrong once that write ends.
 2. **Accepted: re-ask the answers it changed** (`refresh issues`). Its guesses stay until the new answers land (D-34),
    so the change never blinks out and never shows twice. On a decline re-ask nothing: the guesses revert with the
    message, in one frame (AC-7).

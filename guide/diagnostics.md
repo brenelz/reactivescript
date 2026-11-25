@@ -893,6 +893,10 @@ value or throws (R-8). Put the element inside the `loading` / `errored` regions 
 value itself, not only `pending? x`: a probe takes no failure, so a region that reads `x` only through `pending?` stays
 on its content when `x` fails, and the click throws.
 
+The same holds through components. A callback prop (`onMove={(c, i) => { … }}`) runs on the child's click, and a child's
+handler that reads `props.f` reads whatever each parent binds to `f`. A handler reads what its region shows: pass the
+child the value it shows, and have the click read that, not another list the child never shows.
+
 ```rx
 export default component App() {
   source id := 1

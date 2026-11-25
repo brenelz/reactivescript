@@ -354,6 +354,72 @@ fn snapshot_reads<'a>(n: Node<'a>, caught: bool, locals: &mut HashSet<String>, o
         snapshot_reads(c, caught, locals, out);
     }
 }
+/// R-8 through props: `props.f` reads in a handler (the root, the field, whether a `try`/`catch` covers it).
+fn prop_snapshot_reads<'a>(n: Node<'a>, caught: bool, locals: &mut HashSet<String>, out: &mut Vec<(String, String, bool)>) {
+    match n {
+        Node::E(e) => match &e.k {
+            ExprKind::Member { o, p, .. } => {
+                if let ExprKind::Id(root) = &o.k {
+                    out.push((root.clone(), p.clone(), caught));
+                    return;
+                }
+            }
+            ExprKind::Pending(_) | ExprKind::Peek(_) => return,
+            ExprKind::Fn { params, .. } => locals.extend(params.iter().cloned()),
+            ExprKind::Catch { e: inner, alt, .. } => {
+                prop_snapshot_reads(Node::E(inner), true, locals, out);
+                prop_snapshot_reads(Node::E(alt), caught, locals, out);
+                return;
+            }
+            _ => {}
+        },
+        Node::S(st) => match &st.k {
+            StmtKind::Let { name, .. } => {
+                locals.insert(name.clone());
+            }
+            StmtKind::Try { body, handler, fin, catch_name, .. } => {
+                for x in body {
+                    prop_snapshot_reads(Node::S(x), caught || handler.is_some(), locals, out);
+                }
+                if let Some(n) = catch_name {
+                    locals.insert(n.clone());
+                }
+                for x in handler.iter().chain(fin.iter()).flatten() {
+                    prop_snapshot_reads(Node::S(x), caught, locals, out);
+                }
+                return;
+            }
+            _ => {}
+        },
+    }
+    for c in children(n, false) {
+        prop_snapshot_reads(c, caught, locals, out);
+    }
+}
+/// whether `e` reads `root.f` (or the whole `root`, as a spread or an argument)
+fn reads_member(e: &Expr, root: &str, f: &str) -> bool {
+    let mut stack = vec![Node::E(e)];
+    while let Some(n) = stack.pop() {
+        if let Node::E(x) = n {
+            match &x.k {
+                ExprKind::Member { o, p, .. } => {
+                    if let ExprKind::Id(r) = &o.k {
+                        if r == root {
+                            if p == f {
+                                return true;
+                            }
+                            continue;
+                        }
+                    }
+                }
+                ExprKind::Id(r) if r == root => return true,
+                _ => {}
+            }
+        }
+        stack.extend(children(n, false));
+    }
+    false
+}
 /// AC-3a: the submit buttons of a form's markup (a `<button>` without `type`, or `type="submit"`), not through components.
 /// 07 §4: a spread attribute (`{...e}`) passes every field: "*"
 fn field_of(name: &str) -> String {
@@ -822,6 +888,8 @@ struct HandlerRec<'a> {
     region: RId,
     line: i64,
     what: String,
+    /// a callback prop's: the component it is given to
+    comp: Option<RId>,
 }
 struct AppRec<'a> {
     comp: RId,
@@ -876,6 +944,8 @@ pub struct Checker<'a> {
     load_ons: Vec<ReaderRec<'a>>,
     effect_ins: Vec<ReaderRec<'a>>,
     handlers: Vec<HandlerRec<'a>>,
+    /// R-8: a callback prop given to a component (`onMove={(…) => …}`): it runs on the child's click
+    comp_handlers: Vec<HandlerRec<'a>>,
     apps: Vec<AppRec<'a>>,
     actions: Vec<ActionRec<'a>>,
     provisions: Vec<Provision<'a>>,
@@ -955,6 +1025,7 @@ impl<'a> Checker<'a> {
             load_ons: vec![],
             effect_ins: vec![],
             handlers: vec![],
+            comp_handlers: vec![],
             apps: vec![],
             actions: vec![],
             scalar_aliases: HashSet::new(),
@@ -2901,6 +2972,9 @@ impl<'a> Checker<'a> {
                         if is_comp {
                             let cr = self.syms[s.unwrap()].comp_region.unwrap();
                             self.apps.push(AppRec { comp: cr, site: region, line: self.line, tag: tag.clone(), args: attrs.iter().filter(|a| !is_handler(&a.name)).map(|a| (field_of(&a.name), &a.e, env)).collect(), passed: attrs.iter().map(|a| (field_of(&a.name), &a.e, env)).collect() });
+                            for a in attrs.iter().filter(|a| is_handler(&a.name) && matches!(a.e.k, ExprKind::Fn { .. })) {
+                                self.comp_handlers.push(HandlerRec { attrs, kids: children, h: &a.e, env, region, line: self.line, what: format!("<{}> {}", tag, a.name), comp: Some(cr) });
+                            }
                             let kids = self.region(Some(region), "children", false, Some(tag.clone()));
                             self.regions[kids].kids = Some((cr, region));
                             let kenv = self.env(Some(env), kids);
@@ -2917,7 +2991,7 @@ impl<'a> Checker<'a> {
                         if !h {
                             self.readers.push(ReaderRec { region, e: &a.e, env, line: self.line });
                         } else {
-                            self.handlers.push(HandlerRec { attrs, kids: children, h: &a.e, env, region, line: self.line, what: format!("<{}> {}", tag, a.name) });
+                            self.handlers.push(HandlerRec { attrs, kids: children, h: &a.e, env, region, line: self.line, what: format!("<{}> {}", tag, a.name), comp: None });
                         }
                     }
                     self.markup(children, env, false);
@@ -3163,12 +3237,19 @@ impl<'a> Checker<'a> {
     /// or can fail, unless handled (`-> v`; a `try` or `catch` for the failure) or covered (the element's `disabled` reads
     /// it, or the element sits in a `loading` / `errored` region whose content reads it).
     fn snapshot_guards(&mut self) {
-        let hs: Vec<(&'a [Attr], &'a Expr, EId, RId, i64, String)> = self.handlers.iter().map(|h| (h.attrs, h.h, h.env, h.region, h.line, h.what.clone())).collect();
+        let mut hs: Vec<(&'a [Attr], &'a Expr, EId, RId, i64, String, Option<RId>)> = self.handlers.iter().map(|h| (h.attrs, h.h, h.env, h.region, h.line, h.what.clone(), None)).collect();
+        hs.extend(self.comp_handlers.iter().map(|h| (h.attrs, h.h, h.env, h.region, h.line, h.what.clone(), h.comp)));
         let mut absent_memo: HashMap<SId, bool> = HashMap::new();
         let mut done: HashSet<*const Expr> = HashSet::new();
-        for (attrs, h, env, region, line, what) in hs {
+        // values that can be absent or fail: what a value another reads takes its absence or failure from
+        let risky: Vec<SId> = (0..self.syms.len()).filter(|&t| matches!(self.syms[t].kind, SymKind::Eq | SymKind::Source)).collect();
+        let risky: Vec<SId> = risky.into_iter().filter(|&t| self.absent(t, &mut HashMap::new(), &mut HashSet::new()) || (self.syms[t].fails_t.is_some() && !self.sym_fails(t).cls.is_empty())).collect();
+        for (attrs, h, env, region, line, what, comp) in hs {
             if !done.insert(h as *const Expr) {
                 continue;
+            }
+            if comp.is_none() {
+                self.prop_snapshot_guards(attrs, h, env, region, line, &what);
             }
             let mut locals: HashSet<String> = HashSet::new();
             let mut reads: Vec<(String, bool)> = vec![];
@@ -3190,7 +3271,11 @@ impl<'a> Checker<'a> {
                 seen.insert(s);
                 // a `disabled` that reads `s` covers the handler; for a failure it must read the value, since
                 // `pending? s` of a failed `s` is false and leaves the element enabled
-                let disabled_by = |probes: bool| attrs.iter().any(|a| a.name == "disabled" && self.depends_in(&a.e, env, s, &mut HashSet::new(), probes));
+                // a callback prop is covered as well when the element hands the component the value by another prop
+                // (the child shows it, and guards its own click)
+                // (the child shows it, and guards its own click): the value, or a value it takes its failure from
+                let from: Vec<SId> = if comp.is_some() { self.syms[s].expr.map(|(te, tenv)| risky.iter().copied().filter(|&u| u != s && self.depends_in(te, tenv, u, &mut HashSet::new(), false)).collect()).unwrap_or_default() } else { vec![] };
+                let disabled_by = |probes: bool| attrs.iter().any(|a| (a.name == "disabled" && self.depends_in(&a.e, env, s, &mut HashSet::new(), probes)) || (comp.is_some_and(|g| !is_handler(&a.name) && self.child_shows(g, &field_of(&a.name), probes)) && (self.depends_in(&a.e, env, s, &mut HashSet::new(), probes) || from.iter().any(|&u| self.depends_in(&a.e, env, u, &mut HashSet::new(), probes)))));
                 let need_hold = absent && !disabled_by(true) && !self.region_reads(region, s, |r| r.provides.contains(HOLD));
                 let need_catch = failing && !disabled_by(false) && !self.region_reads_in(region, s, |r| r.catches.is_some(), false);
                 if !need_hold && !need_catch {
@@ -3219,6 +3304,102 @@ impl<'a> Checker<'a> {
                 );
             }
         }
+    }
+
+    /// R-8 through props: an element handler that reads `props.f` as a snapshot, where some site gives the component a
+    /// value for `f` that can fail, and neither the child (an `errored` region whose content reads `props.f`, or a
+    /// `disabled` that reads it) nor the site (an `errored` region whose content reads the value) covers it.
+    fn prop_snapshot_guards(&mut self, attrs: &'a [Attr], h: &'a Expr, env: EId, region: RId, line: i64, what: &str) {
+        let mut locals: HashSet<String> = HashSet::new();
+        let mut reads: Vec<(String, String, bool)> = vec![];
+        prop_snapshot_reads(Node::E(h), false, &mut locals, &mut reads);
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        for (root, f, caught) in reads {
+            if caught || locals.contains(&root) || !seen.insert((root.clone(), f.clone())) {
+                continue;
+            }
+            let Some(ps) = self.lookup(env, &root) else { continue };
+            if self.syms[ps].kind != SymKind::Props {
+                continue;
+            }
+            let g = self.syms[ps].region;
+            let failing: Vec<SId> = (0..self.syms.len()).filter(|&t| matches!(self.syms[t].kind, SymKind::Eq | SymKind::Source) && self.syms[t].fails_t.is_some()).collect();
+            let failing: Vec<SId> = failing.into_iter().filter(|&t| !self.sym_fails(t).cls.is_empty()).collect();
+            let sites: Vec<(RId, i64, String, &'a Expr, EId, Vec<(String, &'a Expr, EId)>)> = self.apps.iter().filter(|a| a.comp == g).flat_map(|a| a.args.iter().filter(|(n, _, _)| *n == f).map(move |(_, e, aenv)| (a.site, a.line, a.tag.clone(), *e, *aenv, a.args.clone()))).collect();
+            'site: for (site, sline, tag, e, aenv, args) in sites {
+                for &t in &failing {
+                    if !self.depends_in(e, aenv, t, &mut HashSet::new(), false) || self.region_reads_in(site, t, |r| r.catches.is_some(), false) {
+                        continue;
+                    }
+                    // a failure `t` takes from another failing value `u` is shown wherever `u` is
+                    let from = |u: SId| u != t && self.syms[t].expr.is_some_and(|(te, tenv)| self.depends_in(te, tenv, u, &mut HashSet::new(), false));
+                    if failing.iter().any(|&u| from(u) && self.region_reads_in(site, u, |r| r.catches.is_some(), false)) {
+                        continue;
+                    }
+                    // the child covers it when its `disabled`, or the content of an `errored` region around the element,
+                    // reads a prop this site binds to a value that reads `t` (it then fails with it, and the region shows it)
+                    let covered = args.iter().any(|(gf, ge, genv)| {
+                        self.depends_in(ge, *genv, t, &mut HashSet::new(), false)
+                            && (attrs.iter().any(|a| a.name == "disabled" && reads_member(&a.e, &root, gf)) || self.region_reads_member(region, &root, gf))
+                    });
+                    if !covered {
+                        let tn = self.syms[t].name.clone();
+                        self.line = line;
+                        self.err(
+                            "UNGUARDED_SNAPSHOT",
+                            "R-8",
+                            format!(
+                                "{} reads {}.{} as a snapshot, and <{}> (line {}) gives it a value that reads {}, which can fail: the click then throws its error — read in the handler only what its region shows, or move the element inside an `errored` region whose content reads {}.{}, or read it inside `try {{ … }} catch (e) {{ … }}`",
+                                what, root, f, tag, sline, tn, root, f
+                            ),
+                        );
+                        break 'site;
+                    }
+                }
+            }
+        }
+    }
+    /// whether component `g` reads `props.f` in an `errored` region's content (`probes`: or in a `disabled`), so a value
+    /// bound to `f` that fails takes the elements there down with it
+    fn child_shows(&self, g: RId, f: &str, probes: bool) -> bool {
+        // a component from another module (its body isn't here): trust that it shows what it is handed
+        let Some(ps) = (0..self.syms.len()).find(|&t| self.syms[t].kind == SymKind::Props && self.syms[t].region == g) else { return true };
+        let root = self.syms[ps].name.clone();
+        let comp_of_r = |mut r: RId| loop {
+            if self.regions[r].is_component_root || self.regions[r].parent.is_none() {
+                return r;
+            }
+            r = self.regions[r].parent.unwrap();
+        };
+        let in_g = |r: RId| comp_of_r(r) == g;
+        self.readers.iter().any(|rd| in_g(rd.region) && self.depends_member(rd.e, rd.env, &root, f, &mut HashSet::new()) && {
+            let mut cur = Some(rd.region);
+            let mut hit = false;
+            while let Some(c) = cur {
+                if self.regions[c].catches.is_some() || (probes && self.regions[c].provides.contains(HOLD)) {
+                    hit = true;
+                    break;
+                }
+                if self.regions[c].is_component_root {
+                    break;
+                }
+                cur = self.regions[c].parent;
+            }
+            hit
+        }) || self.handlers.iter().any(|h| in_g(h.region) && h.attrs.iter().any(|a| a.name == "disabled" && reads_member(&a.e, &root, f)))
+    }
+    fn region_reads_member(&self, r: RId, root: &str, f: &str) -> bool {
+        let mut cur = Some(r);
+        while let Some(c) = cur {
+            if self.regions[c].catches.is_some() && self.readers.iter().any(|rd| self.inside(rd.region, c) && self.depends_member(rd.e, rd.env, root, f, &mut HashSet::new())) {
+                return true;
+            }
+            if self.regions[c].is_component_root {
+                break;
+            }
+            cur = self.regions[c].parent;
+        }
+        false
     }
 
     // ---- AC-3a: a guess a click can make while its target loads a new question ----
@@ -3568,6 +3749,43 @@ impl<'a> Checker<'a> {
                             }
                             if let Some((te, tenv)) = self.syms[t].expr {
                                 if busy.insert(t) && self.depends_in(te, tenv, s, busy, probes) {
+                                    return true;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            stack.extend(children(n, false));
+        }
+        false
+    }
+    /// R-8 through props: whether `e` reads `root.f` (or all of `root`), itself or through the equations it reads.
+    fn depends_member(&self, e: &Expr, env: EId, root: &str, f: &str, busy: &mut HashSet<SId>) -> bool {
+        let mut stack = vec![Node::E(e)];
+        while let Some(n) = stack.pop() {
+            if let Node::E(x) = n {
+                match &x.k {
+                    ExprKind::Fn { .. } | ExprKind::ServerFn { .. } | ExprKind::Pending(_) => continue,
+                    ExprKind::Member { o, p, .. } => {
+                        if let ExprKind::Id(r) = &o.k {
+                            if r == root {
+                                if p == f {
+                                    return true;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    ExprKind::Id(name) => {
+                        if name == root {
+                            return true;
+                        }
+                        if let Some(t) = self.lookup(env, name) {
+                            if let Some((te, tenv)) = self.syms[t].expr {
+                                if busy.insert(t) && self.depends_member(te, tenv, root, f, busy) {
                                     return true;
                                 }
                             }
@@ -4455,6 +4673,39 @@ mod tests {
         // `probe`: its region reads only `pending? labels`, so a failure leaves it live; `read` sits beside a value
         // read; `disabled` reads the value, so a failure disables it
         assert_eq!(got, vec![6], "{:?}", codes(src, false));
+    }
+
+    /// 04 R-8 through components (taken by default 2026-11-25; r17 board apps 1 and 6): a callback prop runs on the
+    /// child's click, so its reads are covered at the site, or by a prop the site hands the child that reads the same
+    /// value; a child's handler that reads `props.f` is covered when its region (or its `disabled`) reads a prop the
+    /// site binds to the same value, or the site's region reads it.
+    #[test]
+    fn snapshot_through_components() {
+        let src = r#"component Lane(props: { cards: string; other: string; full: boolean; onGo: () => void }) {
+  errored fallback(e) { <p>failed</p> } {
+    loading fallback { <p>loading</p> } {
+      <p>{props.cards}</p>
+      <button onClick={() => { log(props.other) }}>other</button>
+      <button disabled={props.full} onClick={() => { log(props.other) }}>full</button>
+      <button onClick={() => { log(props.cards) }}>cards</button>
+      <button onClick={() => { props.onGo() }}>go</button>
+    }
+  }
+}
+export default component App() {
+  source id := 1
+  rows = await fetch("u:" + id)
+  other = await fetch("o:" + id)
+  full = other.length > 2
+  <Lane cards={rows} other={other} full={false} onGo={() => { log(other) }} />
+  <Lane cards={rows} other={other} full={full} onGo={() => { log(rows) }} />
+}
+"#;
+        let got: Vec<i64> = codes(src, false).iter().filter(|(_, c)| c == "UNGUARDED_SNAPSHOT").map(|(l, _)| *l).collect();
+        // line 5: `props.other` is read by nothing its region shows (the first site's `full` is `false`); line 6: the
+        // second site's `full` reads `other`, but the first site's doesn't; line 17: `onGo` reads `other`, which the
+        // first site hands the child only through a prop it never shows. Line 18's `onGo` reads `rows`, shown as `cards`.
+        assert_eq!(got, vec![5, 6, 17], "{:?}", codes(src, false));
     }
 
     /// 06 AC-3a: a guess a click can make while its value loads a new question, unless the element is covered.
