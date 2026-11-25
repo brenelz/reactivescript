@@ -1,4 +1,43 @@
 export const extra: Record<string, string> = {
+  "server functions": `import pure { GET } from "./wrappers"
+import pure { findUser } from "./db"
+import { saveUser } from "./db"
+
+server fn loadUser(id: number) {
+  let row = await findUser(id)
+  return { id, name: row.name }
+}
+
+getUser = GET(server fn (id: number) {
+  let row = await findUser(id)
+  return row
+})
+
+export server fn rename(id: number, name: string) {
+  await saveUser(id, name)
+  return name
+}
+
+export default component App() {
+  source id := 1
+  user = await loadUser(id)
+  other = await getUser(id)
+
+  action save() {
+    try {
+      let n = await rename(id, "Grace")
+      id := id + 1
+    } catch (e) {
+    }
+  }
+
+  {errored fallback(e) { <p>{e.message}</p> } {
+    {loading fallback { <p>Loading…</p> } {
+      <p onClick={save}>{user.name} {other.name}</p>
+    }}
+  }}
+}
+`,
   "rest props": `component Badge({ label, tone = "info", ...rest }) {\n  <span class={tone} {...rest}>{label}</span>\n}\n\nexport default component App() {\n  <Badge label="New" title="fresh" />\n}\n`,
   "store path": `export default component App() {\n  source user := { name: "Ada", tags: ["a"] }\n  <p onClick={() => { user.name := "Grace" }}>{user.name}</p>\n}\n`,
 };
@@ -209,7 +248,8 @@ export default function App() {
     "{if cart.items.length > 0 {",
     "<li>Your cart is empty.</li>",
   ] },
-  // .rx has no ambient names: Math and console are imported from helpers.ts, pure where reactive scope reads them;
+  // .rx has no ambient names: Math is imported from helpers.ts, pure where reactive scope reads it; console.log is
+  // the builtin log;
   // a source's first value that reads a reactive name is a peek (E-4)
   "globals and first values": { solid: `import { createMemo, createSignal } from "solid-js";
 
@@ -231,9 +271,9 @@ export default function App() {
     </button>
   );
 }
-`, helpers: ["export const { Math, console } = globalThis;"], has: [
+`, helpers: ["export const { Math } = globalThis;"], has: [
     'import pure { Math } from "./helpers"',
-    'import { console } from "./helpers"',
+    "onClick={() => { log(count); count := count + 1 }}",
     "source start := peek(count * 2)",
     "source cap := peek(LIMIT)",
     "{capped} of {cap} from {start}",
@@ -470,11 +510,11 @@ export default function App() {
 `, has: [
     "effect (count) {",
     'assign(document, "title", `Count ${$0}`)',
-    'return () => console.log("was", $0)',
+    'return () => log("was", $0)',
     "effect (count, double) {",
-    "console.log($0, $1)",
+    "log($0, $1)",
     "effect () {",
-    'console.log("mounted")',
+    'log("mounted")',
   ] },
   // createDeferred is a deferred equation (V-16)
   "a deferred value": { solid: `import { createDeferred, createSignal } from "solid-js";
@@ -485,6 +525,47 @@ export default function App() {
   return <p onClick={() => setQuery("a")}>{shown()}</p>;
 }
 `, has: ["deferred shown = query.toUpperCase()", "{shown}"] },
+  // a "use server" function is a server fn; a call from reactive scope is awaited, and what its body imports is
+  // imported pure, or the question would be io (12 SF-1b, SF-2b)
+  "a use server function": { solid: `import { createMemo, createSignal, Errored, Loading } from "solid-js";
+import { findUser } from "./db";
+import { GET } from "./wrappers";
+
+async function loadUser(id: number) {
+  "use server";
+  const row = await findUser(id);
+  return { id, name: row.name };
+}
+
+const getUser = GET(async function (id: number) {
+  "use server";
+  return await findUser(id);
+});
+
+export default function App() {
+  const [id, setId] = createSignal(1);
+  const user = createMemo(() => loadUser(id()));
+  const other = createMemo(() => getUser(id()));
+  return (
+    <Errored fallback={(e) => <p>{e().message}</p>}>
+      <Loading fallback={<p>Loading…</p>}>
+        <p onClick={() => setId(id() + 1)}>{user().name} {other().name}</p>
+      </Loading>
+    </Errored>
+  );
+}
+`, has: [
+    'import pure { findUser } from "./db"',
+    'import pure { GET } from "./wrappers"',
+    "server fn loadUser(id: number) {",
+    "const row = await findUser(id)",
+    "return { id, name: row.name }",
+    "getUser = GET(server fn (id: number) {",
+    "let value = await findUser(id)",
+    "return value",
+    "user = await loadUser(id)",
+    "other = await getUser(id)",
+  ] },
   refused: { solid: `import { createSignal, createEffect, createMemo } from "solid-js";
 
 function useDouble(n) {

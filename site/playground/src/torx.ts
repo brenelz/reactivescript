@@ -13,6 +13,7 @@ type Binding =
   | { kind: "handler"; fn: Node } // a setup function that writes or has statements: an action
   | { kind: "mutable" } // a `let` in a component's setup: a source (.rx has no other writable name there), read by peek in reactive scope
   | { kind: "equation" } // a module's own declaration: read as itself, and a reactive read
+  | { kind: "server" } // a "use server" function: a call from reactive scope is an await (12 SF-2)
   | { kind: "input"; as: string } // an effect's parameter: its input, by position ($0, $1)
   | { kind: "plain" };
 
@@ -49,8 +50,14 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   const aliases = new Map<string, { store: string; fn: Node; written: Map<string, string>; wrote?: boolean; guess?: boolean }>();
   let exact = 0; // a write's target is printed as written, never as the local that holds its value
   // `x++` inside a statement: the write, placed after it
-  const hoisted: ({ stmt: Node; after: string[] } | null)[] = [];
+  const hoisted: ({ stmt: Node; after: string[]; before: string[] } | null)[] = [];
   const squeeze = (t: string) => t.replace(/\s+/g, "");
+  /** A function with the "use server" directive. */
+  const isServer = (f: Node | null | undefined) => !!f && (isFn(f) || f.type === "FunctionDeclaration") && f.body?.type === "BlockStatement" && (f.body.directives ?? []).some((d: Node) => d.value?.value === "use server");
+  // what each server fn's body imports, and which are asked from reactive scope: those imports have to be pure (SF-1b)
+  const serverCalls = new Map<string, Set<string>>();
+  const askedServers = new Set<string>();
+  let inServer: string | undefined;
   const globals = new Map<string, boolean>(); // each one used, and whether reactive scope reads it (a pure import)
   let assigns = false; // a plain JavaScript assignment was written as assign(target, key, value)
   let reactive = 0; // reads of reactive names so far: a source's first value that has one is a peek
@@ -120,6 +127,13 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       if (b?.kind === "store" && a.length === 0) return reactive++, name;
       if (b?.kind === "handler" && !imperative) return fail(n, `${name} writes and is called while rendering: reactive scope cannot write in .rx (R-io-3)`);
       if (b?.kind === "await" && a.length === 0) return tight ? `(${b.text})` : b.text;
+      if (b?.kind === "import" && inServer) serverCalls.get(inServer)?.add(name);
+      if (b?.kind === "server" && !imperative && !awaiting.has(n) && !(parent && /Await|Yield/.test(parent.type))) {
+        awaiting.add(n);
+        askedServers.add(name);
+        const s = `await ${expr(n)}`;
+        return tight ? `(${s})` : s;
+      }
       if (b?.kind === "import" && !imperative) {
         pureImports.add(name);
         if (b.async && !awaiting.has(n) && !(parent && /Await|Yield/.test(parent.type))) {
@@ -148,6 +162,8 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     }
     if (/CallExpression$/.test(n.type) && /MemberExpression$/.test(n.callee.type) && !n.callee.computed) {
       const m = n.callee.property.name as string;
+      // `console.log(…)` is .rx's log: a builtin, where `console` itself would have to be imported
+      if (m === "log" && n.callee.object.type === "Identifier" && n.callee.object.name === "console" && !lookup("console")) return `log(${n.arguments.map((x: Node) => expr(x)).join(", ")})`;
       if (m === "then" || m === "catch" || m === "finally") return fail(n, `.${m}(…): .rx has no promise chaining; an action's failure is caught in its body, try { … } catch (e) { … }`);
       const o = n.callee.object.type === "Identifier" ? lookup(n.callee.object.name) : undefined;
       if (o?.kind === "import" && o.asyncMembers?.has(m) && !imperative && !awaiting.has(n) && !(parent && /Await|Yield/.test(parent.type))) {
@@ -174,8 +190,19 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     }
     if (n.type === "YieldExpression" || n.type === "AwaitExpression") {
       const s = `await ${expr(n.argument, n)}`;
+      // in imperative scope a run suspends only at a statement (AC-1): an await inside an expression is bound first
+      const h = hoisted[hoisted.length - 1];
+      if (imperative && parent && h) {
+        let v = "value";
+        for (let i = 2; lookup(v); i++) v = `value${i}`;
+        bind(v, { kind: "plain" });
+        h.before.push(...`let ${v} = ${s}`.split("\n"));
+        return v;
+      }
       return tight ? `(${s})` : s;
     }
+    // `GET(async function (id) { "use server"; … })`: a server fn as an expression (SF-1d)
+    if (isFn(n) && isServer(n)) return ["server fn (" + params(n) + ") {", ...serverBody(n).map((l) => "\t" + l), "}"].join("\n");
     if (isFn(n)) {
       if (n.type === "FunctionExpression") return fail(n, "a function expression: .rx has arrow functions only");
       const shadow = new Map<string, Binding>();
@@ -220,6 +247,16 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     if (name && (lookup(name)?.kind === "setter" || ((name === "affects" || name === "refresh") && lookup(name)?.kind === "plain"))) return true;
     if (e.type === "AssignmentExpression" && /MemberExpression$/.test(e.left.type)) return true;
     return e.type === "CallExpression" && e.callee.type === "MemberExpression" && e.callee.object.type === "Identifier" && lookup(e.callee.object.name)?.kind === "setter";
+  }
+
+  /** A server fn's statements: imperative scope, on the server. */
+  function serverBody(f: Node): string[] {
+    imperative++;
+    scopes.push(new Map(f.params.flatMap(names).map((n: string) => [n, { kind: "plain" } as Binding])));
+    const lines = f.body.body.flatMap(stmt);
+    scopes.pop();
+    imperative--;
+    return lines;
   }
 
   function names(p: Node): string[] {
@@ -398,9 +435,10 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   }
 
   function stmt(s: Node): string[] {
-    hoisted.push(s.type === "ExpressionStatement" || s.type === "VariableDeclaration" ? { stmt: s, after: [] } : null);
+    hoisted.push(/^(Expression|Return|Throw)Statement$|^VariableDeclaration$/.test(s.type) ? { stmt: s, after: [], before: [] } : null);
     const lines = statement(s);
-    return [...lines, ...(hoisted.pop()?.after ?? [])];
+    const h = hoisted.pop();
+    return [...(h?.before ?? []), ...lines, ...(h?.after ?? [])];
   }
 
   function statement(s: Node): string[] {
@@ -463,9 +501,9 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
           return `${s.kind === "const" ? "const" : "let"} ${text(d.id)}${d.init ? ` = ${expr(d.init)}` : ""}`.split("\n");
         });
       case "ReturnStatement":
-        return (s.argument ? `return ${expr(s.argument)}` : "return").split("\n");
+        return (s.argument ? `return ${expr(s.argument, s)}` : "return").split("\n");
       case "ThrowStatement":
-        return `throw ${expr(s.argument)}`.split("\n");
+        return `throw ${expr(s.argument, s)}`.split("\n");
       case "IfStatement": {
         const out = [`if (${expr(s.test)}) {`, ...indented(body(s.consequent), INDENT)];
         if (s.alternate && !(s.alternate.type === "BlockStatement" && !s.alternate.body.length)) out.push("} else {", ...indented(body(s.alternate), INDENT));
@@ -733,7 +771,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   function declare(stmts: Node[], setup = false) {
     const later: Node[] = [];
     for (const s of stmts) {
-      if (s.type === "FunctionDeclaration" && s.id) bind(s.id.name, setup && !returned(s) ? { kind: "handler", fn: s } : { kind: "plain" });
+      if (s.type === "FunctionDeclaration" && s.id) bind(s.id.name, isServer(s) ? { kind: "server" } : setup && !returned(s) ? { kind: "handler", fn: s } : { kind: "plain" });
       if (s.type !== "VariableDeclaration") continue;
       for (const d of s.declarations) {
         const name = callee(d.init);
@@ -752,7 +790,8 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
             bind(set, { kind: "setter", of: get, guess: true });
           }
         } else if (d.id.type === "Identifier") {
-          if (name === "createMemo" || name === "createDeferred") bind(d.id.name, { kind: "read" });
+          if (isServer(d.init) || (/CallExpression$/.test(d.init?.type ?? "") && d.init.arguments.some(isServer))) bind(d.id.name, { kind: "server" });
+          else if (name === "createMemo" || name === "createDeferred") bind(d.id.name, { kind: "read" });
           else if (d.init?.type === "ArrowFunctionExpression" && d.init.body.type === "BlockStatement" && !returned(d.init) && (setup || !d.init.async)) bind(d.id.name, { kind: "handler", fn: d.init });
           else if (setup && d.init?.type === "ArrowFunctionExpression") (bind(d.id.name, { kind: "plain" }), later.push(d));
           else if (s.kind === "let" && (setup || d.init) && !isFn(d.init) && !/^create[A-Z]/.test(name ?? "")) bind(d.id.name, { kind: "mutable" });
@@ -829,7 +868,18 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     return effectBlock(inputs.join(", "), effect, bound);
   }
 
+  /** `async function f(a) { "use server"; … }`: `server fn f(a) { … }` (12 SF-1). */
+  function serverDecl(id: string, f: Node): string[] {
+    const outer = inServer;
+    inServer = id;
+    serverCalls.set(id, new Set());
+    const lines = serverBody(f);
+    inServer = outer;
+    return [`server fn ${id}(${params(f)}) {`, ...indented(lines, INDENT), "}"];
+  }
+
   function decl(s: Node, all: Node[]): string[] {
+    if (s.type === "FunctionDeclaration" && isServer(s)) return serverDecl(s.id.name, s);
     if (s.type === "FunctionDeclaration") {
       const h = lookup(s.id.name);
       return h?.kind === "handler" ? actionDecl(s.id.name, s) : fnDecl(s.id.name, s);
@@ -940,6 +990,16 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       if (name === "omit") return fail(d, `${id} = omit(…): only read as the rest of a prop pattern`), [];
       if (name && /^create[A-Z]/.test(name) && lookup(name)?.kind === "plain") return fail(d, `${name}: no .rx form in this prototype`), [];
       const h = lookup(id);
+      if (isServer(init)) return serverDecl(id, init);
+      if (h?.kind === "server") {
+        // a wrapped one: the wrapper is applied where the equation is declared
+        const outer = inServer;
+        inServer = id;
+        serverCalls.set(id, new Set());
+        const wrapped = `${id} = ${expr(init)}`.split("\n");
+        inServer = outer;
+        return wrapped;
+      }
       if (h?.kind === "handler") return actionDecl(id, h.fn);
       if (h?.kind === "mutable") return `source ${id}${d.id.typeAnnotation ? text(d.id.typeAnnotation) : ""} := ${first(init)}`.split("\n");
       if (isFn(init)) return fnDecl(id, init);
@@ -1145,6 +1205,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     else chunks.push({ text: lines.join("\n"), single });
   }
 
+  for (const name of askedServers) for (const local of serverCalls.get(name) ?? []) pureImports.add(local);
   const usedBy = (nodes: Node[], s: Node) => s.specifiers.some((sp: Node) => uses(nodes, sp.local.name));
   const imports: string[] = [];
   const kept: string[] = [];

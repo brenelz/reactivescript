@@ -159,6 +159,28 @@ export function solidify(code: string): string {
 
   // import aliases: `import { f as w$f }` and `const v$f = w$f;` are one name
   code = code.replace(/(\w+) as w\$\1\b/g, "$1").replace(/^\s*const v\$(\w+) = w\$\1;\n/gm, "");
+  // at the module's top level (a server fn's body) an import is still read by its alias
+  const imported = [...code.matchAll(/^import \{([^}]*)\} from /gm)].flatMap((m) => m[1].split(",").map((x) => x.trim().split(/\s+as\s+/).pop()!)).filter(Boolean);
+  for (const n of imported) code = inCode(code, (part) => part.replace(new RegExp(`\\bw\\$${n}\\b`, "g"), n));
+  // `server fn f(a) { … }` (12 SF-1): Solid's "use server" function. Its body arrives as a generator handed to the
+  // runtime, each await a yield
+  for (let i = code.indexOf("async function sf$"); i >= 0; i = code.indexOf("async function sf$", i + 1)) {
+    const head = /^async function sf\$(\w+?)(\$\d+)?\(\.\.\.__a\) /.exec(code.slice(i));
+    if (!head) continue;
+    const open = i + head[0].length;
+    const end = close(code, open);
+    const call = code.indexOf("__rt.serverCall(", open);
+    if (call < 0 || call > end) continue;
+    const gen = args(code, call + "__rt.serverCall".length).list[1] ?? "";
+    const p = gen.indexOf("(");
+    const pe = p < 0 ? -1 : close(gen, p);
+    const b = pe < 0 ? -1 : gen.indexOf("{", pe);
+    if (!gen.startsWith("function*") || b < 0) continue;
+    const body = inCode(gen.slice(b + 1, close(gen, b) - 1), (part) => part.replace(/\byield\b/g, "await"));
+    code = code.slice(0, i) + `async function ${head[2] ? "" : head[1]}(${gen.slice(p + 1, pe - 1)}) {\n"use server";${body}}` + code.slice(end);
+  }
+  // the name a server fn is called by is the function itself
+  code = code.replace(/^[ \t]*const v\$(\w+) = __rt\.serverRef\("\1", sf\$\1\);\n/gm, "").replace(/\bsf\$(\w+)\b/g, "$1");
   code = code.replace(/^[ \t]*__rt\.reg\([^;]*\);\n/gm, "").replace(/^[ \t]*__rt\.hoisted\([^;]*\);\n/gm, "");
   if ((code.match(/\b__o\b/g) ?? []).length === (code.match(/const __o = __rt\.owner\(\);/g) ?? []).length)
     code = code.replace(/^[ \t]*const __o = __rt\.owner\(\);\n/gm, "");
@@ -362,7 +384,12 @@ export function solidify(code: string): string {
   const api: string[] = [];
   code = code.replace(/^[ \t]*const ([\w$]+) = __rt\.api\("([\w$]+)"\);\n/gm, (_, local, name) => (api.push(local === name ? name : `${name} as ${local}`), ""));
   if (api.length) code = `import { ${api.join(", ")} } from "./api";\n` + code;
-  // .rx's builtins (len, str, fetch, …) are names of their own, not JavaScript's
+  // `log` is the one builtin JavaScript has a name for: the console's. A module that imported the name gets the same
+  const logs = new Set<string>();
+  code = code.replace(/^[ \t]*const ([\w$]+) = __B\.log;\n/gm, (_, n) => (logs.add(n), ""));
+  for (const n of logs) code = inCode(code, (part) => part.replace(new RegExp(`(?<![\\w$.])${n.replace(/\$/g, "\\$")}\\(`, "g"), "console.log("));
+  code = code.replace(/\b__B\.log\(/g, "console.log(");
+  // .rx's other builtins (len, str, fetch, …) are names of their own, not JavaScript's
   code = code.replace(/\b__B\.(\w+)\b/g, "$1");
   // `const len = __B.len` named a builtin for the module: with __B gone it would read itself
   code = code.replace(/^[ \t]*const ([\w$]+) = \1;\n/gm, "");

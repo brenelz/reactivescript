@@ -348,6 +348,34 @@ await check("Open in Solid Playground carries the view as tabs, with what it imp
   assert(why.includes("./io"), `the reason does not name the missing module: ${why}`);
 });
 
+await check("log is offered as a built-in, and reads as console.log in the Solid view", async () => {
+  const program = `export default component App() {\n  source n := 0\n  <p onClick={() => {  }}>{n}</p>\n}\n`;
+  await type(program);
+  await editor.evaluate((el, at) => (el.focus(), el.setSelectionRange(at, at)), program.indexOf("{  }") + 2);
+  await page.keyboard.type("lo");
+  const menu = page.getByTestId("complete");
+  let seen = [];
+  for (let i = 0; i < 100 && seen[0] !== "log"; i++) {
+    seen = (await menu.locator("li span").allInnerTexts().catch(() => [])).map((t) => t.trim());
+    await page.waitForTimeout(150);
+  }
+  assert(seen[0] === "log", `log is not offered first: ${seen.join(", ") || "nothing"}`);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type('("clicked", n)');
+  await js.getByText("console.log", { exact: false }).first().waitFor({ timeout: 5000 });
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  assert(text.includes('console.log("clicked", untrack(n));') && !text.includes("__"), `log in the view:\n${text}`);
+  await page.locator("a[data-testid=open-solid]").waitFor({ timeout: 5000 });
+});
+
+await check("a server fn reads as a \"use server\" function, its awaits and imports as written", async () => {
+  await type(`import pure { findUser } from "./db"\n\nserver fn loadUser(id: number) {\n  let row = await findUser(id)\n  return { id, name: row.name }\n}\n\nexport default component App() {\n  source id := 1\n  user = await loadUser(id)\n  {errored fallback(e) { <p>{e.message}</p> } {\n    {loading fallback { <p>Loading</p> } {\n      <p>{user.name}</p>\n    }}\n  }}\n}\n`);
+  await js.getByText("use server", { exact: false }).first().waitFor({ timeout: 5000 });
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  assert(text.includes('async function loadUser(id) { "use server";') && text.includes("let row = await findUser(id);"), `the server fn:\n${text}`);
+  assert(text.includes("createMemo(() => loadUser(id()))") && !text.includes("__rt") && !text.includes("sf$") && !text.includes("setFindUser"), `what is left of the runtime:\n${text}`);
+});
+
 await check("no uncaught page errors", async () => {
   assert(pageErrors.length === 0, pageErrors.join("\n"));
 });

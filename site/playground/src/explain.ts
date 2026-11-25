@@ -69,6 +69,7 @@ export function noteFor(line: string): Note | undefined {
   }
   if ((m = /^\s*affects\((\w+)\)/.exec(line))) return { helper: "affects", name: m[1], reads: [], text: `affects ${m[1]}: pending? ${m[1]} is true while the action runs` };
   if ((m = /const (\w+) = createDeferred\(/.exec(line))) return { helper: "createDeferred", name: m[1], reads: [], text: `deferred ${m[1]} = …: follows its inputs a step behind (V-16)` };
+  if (/^\s*"use server";/.test(line)) return { helper: '"use server"', reads: [], text: "server fn …: its body runs on the server, and a call is a request (SF-1, SF-2)" };
   if (/^\s*onFlush\(/.test(line)) return { helper: "onFlush", reads: [], text: "lands now, in its own instant (EF-8)" };
   if (/^\s*createEffect\(/.test(line)) return { helper: "createEffect", reads: [], text: "effect (…) { … }: runs when an input's value changes; a returned function is its cleanup (EF-2, EF-5)" };
   if ((m = /^\s*<(Errored|Loading|Show|For)\b/.exec(line))) return { helper: m[1], reads: [], text: SOLID_PRIMS[m[1]] };

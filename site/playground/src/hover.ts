@@ -77,8 +77,10 @@ export async function typeAt(files: Record<string, string>, name: string, offset
   return { text: inRx(a.text, rx.slice(s, s + n), rx), doc: a.doc ?? "", start: s, length: n };
 }
 
+// what every .rx module has without importing it (spec/11 CP-4b, `B`)
+const BUILTINS = "log str len map filter sum every indexOf onFlush onSettled until".split(" ");
 // the forms a name can start: offered beside the names in scope, never after a dot
-const KEYWORDS = "source component action effect fn await latest peek pre guess refresh affects draft import export let return try catch if else for loading errored fallback".split(" ");
+const KEYWORDS = "source component action server effect fn await latest peek pre guess refresh affects draft import export let return try catch if else for loading errored fallback".split(" ");
 
 /** Of what TypeScript offers, what continues the word being typed. */
 function fitting(items: Entry[], prefix: string, from: number): { from: number; items: Entry[] } {
@@ -115,7 +117,7 @@ export async function completeAt(files: Record<string, string>, name: string, of
   const hit = (p.maps["/" + name] ?? []).filter(([, s, n]) => s <= offset && offset <= s + n).sort((a, b) => a[2] - b[2])[0];
   let items: Entry[] = [];
   if (hit) items = (await ask({ files: p.files, file: `/${name.slice(0, -3)}.tsx`, offset: hit[0] + (offset - hit[1]), complete: true })).entries ?? [];
-  if (rx[from - 1] !== "." && prefix) items = [...items, ...KEYWORDS.map((k) => ({ name: k, kind: "keyword" }))];
+  if (rx[from - 1] !== "." && prefix) items = [...items, ...BUILTINS.map((k) => ({ name: k, kind: "built-in" })), ...KEYWORDS.map((k) => ({ name: k, kind: "keyword" }))];
   return fitting(items, prefix, from);
 }
 
