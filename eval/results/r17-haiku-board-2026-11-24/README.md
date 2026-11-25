@@ -18,7 +18,7 @@ passes and the after-left family.
 
 With the two Solid bugs below fixed: 9, 4, 1, 3, 4, 2 = 3.83. No duplicate-id holes (AC-1h's family) remain.
 
-Hold probes: `holds/` (round 15 probes, the rerun's, and `../rerun-2026-11-23/trace/holds-item-reload.mjs`, new: app 4
+Hold probes (all ruled fine by Ryan 2026-11-25): `holds/` (round 15 probes, the rerun's, and `../rerun-2026-11-23/trace/holds-item-reload.mjs`, new: app 4
 holds an item add until its toggle's column re-asks land, which the hidden test never answers; it settles right).
 
 ## Every failure, traced

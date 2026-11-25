@@ -14,7 +14,7 @@ after-left family (`python3 score.py`).
 
 Round 15 column rescored with the same probes (it was 0, 1.5, 6.33, 25.17).
 
-Probe changes (judgement calls, for Ryan to check):
+Probe changes (judgement calls; Ryan 2026-11-25: "These are all fine"):
 - `round15/trace/holds9.mjs` re-ask also answers the selected issue's detail; `round15/trace/holds.mjs` `reloads()`
   answers columns not named as they first loaded. Apps that re-ask every list after a write held there and settle right.
 - `trace/holds-board-reopen.mjs`: "the new-card input starts empty when the board opens again" checked after To do's
