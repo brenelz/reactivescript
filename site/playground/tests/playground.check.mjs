@@ -376,6 +376,14 @@ await check("a server fn reads as a \"use server\" function, its awaits and impo
   assert(text.includes("createMemo(() => loadUser(id()))") && !text.includes("__rt") && !text.includes("sf$") && !text.includes("setFindUser"), `what is left of the runtime:\n${text}`);
 });
 
+await check("a fallback with no error name and a branch with its own names show no placeholders", async () => {
+  await type(`import pure { fetchUser } from "./users"\n\nexport default component App() {\n  source show := true\n  source id := 1\n  {errored fallback { <p>Failed</p> } {\n    {if show {\n      user = await fetchUser(id)\n      {loading fallback { <p>Loading</p> } { <p>{user.name}</p> }}\n    }}\n  }}\n}\n`);
+  await js.getByText("Failed", { exact: false }).first().waitFor({ timeout: 5000 });
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  assert(text.includes("<Errored fallback={<p>Failed</p>}>") && text.includes("{() => {"), `the placeholders:\n${text}`);
+  assert(!text.includes("__err") && !text.includes("__item"), `a placeholder is left:\n${text}`);
+});
+
 await check("no uncaught page errors", async () => {
   assert(pageErrors.length === 0, pageErrors.join("\n"));
 });

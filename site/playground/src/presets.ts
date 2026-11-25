@@ -130,6 +130,78 @@ export async function saveName(name) {
     },
   },
   {
+    id: "server",
+    title: "server fn",
+    blurb: "A server fn's body runs on the server. The view writes it as Solid's \"use server\" function, and an equation that calls it awaits a request.",
+    files: {
+      "main.rx": `import pure { findUser } from "./db"
+import { renameUser } from "./db"
+
+// runs on the server; a call from the page is a request
+server fn loadUser(id: number) {
+  let row = await findUser(id)
+  return { id, name: row.name }
+}
+
+server fn rename(id: number, name: string) {
+  await renameUser(id, name)
+}
+
+export default component App() {
+  source id := 1
+  source draft := ""
+  source saveError := ""
+  user = await loadUser(id)
+
+  action save() {
+    try {
+      await rename(id, draft)
+      saveError := ""
+      refresh user
+    } catch (e) {
+      saveError := e.message
+    }
+  }
+
+  <section>
+    {errored fallback(e) { <p class="error">{e.message}</p> } {
+      {loading fallback { <p>Loading…</p> } {
+        <h2 class={pending? user ? "stale" : ""}>{user.name}</h2>
+      }}
+    }}
+    <input value={draft} onInput={(e) => { draft := e.currentTarget.value }} />
+    <button type="button" onClick={save}>Rename</button>
+    <button type="button" onClick={() => { id := latest id % 3 + 1 }}>Next user</button>
+    {if saveError != "" { <p class="error">{saveError}</p> }}
+  </section>
+
+  <style>
+    .stale { opacity: 0.5; }
+    .error { color: crimson; }
+  </style>
+}
+`,
+      "db.d.rx": `export pure fn findUser(id: number)
+export fn renameUser(id: number, name: string)
+`,
+      // what db.d.rx declares: on a real server this would be the database
+      "db.js": `const names = ["Ada", "Grace", "Anders"];
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function findUser(id) {
+  await wait(300);
+  return { id, name: names[id - 1] };
+}
+
+export async function renameUser(id, name) {
+  await wait(500);
+  if (!name.trim()) throw new Error("A name cannot be empty.");
+  names[id - 1] = name.trim();
+}
+`,
+    },
+  },
+  {
     id: "control",
     title: "for and if",
     blurb: "for and if are expressions in the view; they lower to Solid's For and Show.",

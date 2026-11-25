@@ -324,7 +324,15 @@ export function solidify(code: string): string {
     const body = i + "(__item) => ".length;
     const end = "([{".includes(code[body]) ? close(code, body) : code.indexOf("\n", body);
     // a block body stays a function: `{{ … }}` is not JSX
-    if (code[body] !== "{" && !/\b__item\b/.test(code.slice(body, end < 0 ? undefined : end))) code = code.slice(0, i) + code.slice(body);
+    // an inner branch's own `(__item) =>` is not a read of this one
+    if (/\b__item\b(?!\) =>)/.test(code.slice(body, end < 0 ? undefined : end))) continue;
+    code = code.slice(0, i) + (code[body] === "{" ? "() => " : "") + code.slice(body);
+  }
+  // an errored fallback that names no error is the fallback itself
+  for (let i = code.indexOf("fallback={(__err) => "); i >= 0; i = code.indexOf("fallback={(__err) => ", i + 1)) {
+    const body = i + "fallback={(__err) => ".length;
+    const end = close(code, i + "fallback=".length) - 1;
+    if (!/\b__err\b/.test(code.slice(body, end))) code = code.slice(0, i) + "fallback={" + code.slice(body);
   }
 
   // writers and names
