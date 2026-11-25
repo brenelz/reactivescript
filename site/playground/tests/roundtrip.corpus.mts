@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { join, relative } from "node:path";
 import { loadRxc } from "../src/rxc.ts";
 import { solidify } from "../src/solidify.ts";
-import { toRx } from "../src/torx.ts";
+import { declaredIn, toRx } from "../src/torx.ts";
 import * as prettier from "prettier/standalone";
 import * as babel from "prettier/plugins/babel";
 import * as estree from "prettier/plugins/estree";
@@ -92,7 +92,13 @@ for (const d of apps(process.argv.slice(2))) {
   for (const [mod, view] of Object.entries(v0)) {
     let r: ReturnType<typeof toRx>;
     try {
-      r = toRx(parse(view), view);
+      // the other modules' views: what each exports, so a source read across modules reads as itself
+      // and its .d.rx files: a pure fn imports pure, an io fn does not
+      const declared = (from: string, name: string) => {
+        const d = files["/" + from.replace(/^\.\//, "").replace(/\.\w+$/, "") + ".d.rx"];
+        return d === undefined ? undefined : declaredIn(d).get(name);
+      };
+      r = toRx(parse(view), view, { declared, modules: (from) => (v0["/" + from.replace(/^\.\//, "")] === undefined ? undefined : parse(v0["/" + from.replace(/^\.\//, "")])) });
     } catch (e) {
       note({ app, module: mod, kind: "torx-throws", detail: (e as Error).stack ?? String(e), view });
       broke = true;

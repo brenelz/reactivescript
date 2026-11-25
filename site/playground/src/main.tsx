@@ -222,12 +222,12 @@ export default function Counter() {
 `;
 
 /** Solid 2.0 on the left, the same program as .rx on the right (torx.ts), checked by the compiler. */
-function FromSolid(props: { source: string; onChange: (value: string) => void; files: Record<string, string>; ready: boolean; hidden: boolean; onRx: (r: { of: string; code: string; files: Record<string, string> }) => void }) {
+function FromSolid(props: { source: string; onChange: (value: string) => void; files: Record<string, string>; ready: boolean; hidden: boolean; views: Record<string, string>; onRx: (r: { of: string; code: string; files: Record<string, string> }) => void }) {
   const [out, setOut] = createSignal<{ of: string; code: string; problems: RxProblem[]; files: Record<string, string> }>({ of: "", code: "", problems: [], files: {} });
   createEffect(
-    () => props.source,
-    (source) => {
-      solidToRx(source).then((r) => {
+    () => [props.source, props.views] as const,
+    ([source, views]) => {
+      solidToRx(source, views).then((r) => {
         if (props.source !== source) return;
         setOut({ of: source, ...r });
         props.onRx({ of: source, code: r.problems.length ? "" : r.code, files: r.files });
@@ -403,6 +403,24 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     },
   );
   const shown = () => (solid().raw === rawJsx() ? solid().code : "");
+  // the Solid view of each .rx module, by file name: the converter reads what another module exports from it
+  const moduleViews = createMemo(() => {
+    const out: Record<string, string> = {};
+    let name = ENTRY.replace(/^\//, "");
+    let lines: string[] = [];
+    for (const l of shown().split("\n")) {
+      const h = /^\/\/ \/(\S+\.rx)$/.exec(l);
+      if (!h) {
+        lines.push(l);
+        continue;
+      }
+      out[name] = lines.join("\n");
+      name = h[1];
+      lines = [];
+    }
+    out[name] = lines.join("\n");
+    return out;
+  });
   // each view line's .rx line, where it can be told: a click there selects it in the editor
   const links = createMemo(() => linkLines(shown(), files()));
   const [picked, setPicked] = createSignal(-1);
@@ -561,7 +579,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
         <Show when={presets.find((p) => p.id === preset())}>{(p) => <p class="blurb">{p().blurb}</p>}</Show>
       </Show>
 
-      <FromSolid source={solidSource()} onChange={setSolidSource} files={files()} ready={ready()} hidden={mode() !== "solid"} onRx={(r) => (converted = r)} />
+      <FromSolid source={solidSource()} onChange={setSolidSource} files={files()} ready={ready()} hidden={mode() !== "solid"} views={moduleViews()} onRx={(r) => (converted = r)} />
       <main class="grid" hidden={mode() !== "rx"}>
         <section class="pane editor-pane">
           <div class="tabs">

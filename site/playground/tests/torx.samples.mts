@@ -1,4 +1,31 @@
 export const extra: Record<string, string> = {
+  "a first paint": `export default component App() {
+  source id := 1
+  a = await fetch("a:" + id) -> "first"
+  <main>
+    <button onClick={() => { id := id + 1 }}>+</button>
+    {errored fallback(e) { <p>err {e.message}</p> } {
+      <p>{a} {pending? a ? "busy" : "idle"}</p>
+    }}
+  </main>
+}
+`,
+  "catches on awaits": `export error Gone(n: number) => \`gone \${n}\`
+
+export default component App() {
+  source id := 1
+  b = await fetch("b:" + id) -> 0 catch (e) => -1
+  c = await fetch("c:" + id) catch (e: Gone) => 7
+  <main>
+    <button onClick={() => { id := id + 1 }}>+</button>
+    {errored fallback(e) { <p>err {e.message}</p> } {
+      {loading fallback { <p>wait</p> } {
+        <p>{b} {c}</p>
+      }}
+    }}
+  </main>
+}
+`,
   "typed errors": `export error Big(n: number) => \`too big: \${n}\`
 export error Odd(n: number) => \`odd: \${n}\`
 
@@ -716,6 +743,68 @@ export default function App() {
     "t = use theme",
     "provide theme = dark ? \"dark\" : \"light\"",
     "<Badge />",
+  ] },
+  // loadingValue is a first paint, a promise's catch an await's catch, and a memo whose try lets NotReadyError
+  // through a catch on what it reads (R-7, R-f-4)
+  "a first paint and catches in Solid": { solid: `import { createMemo, createSignal, Errored, Loading, NotReadyError } from "solid-js";
+
+export default function App() {
+  const [id, setId] = createSignal(1);
+  const [user, setUser] = createSignal(() => fetch("u:" + id()), { loadingValue: "nobody" });
+  const i$size = createMemo(() => fetch("s:" + id()).catch((e) => 0), { loadingValue: 10 });
+  const size = createMemo(() => {
+    try {
+      return i$size();
+    } catch (e) {
+      if (e instanceof NotReadyError) throw e;
+      return 0;
+    }
+  });
+  return (
+    <Errored fallback={(e) => <p>{e().message}</p>}>
+      <Loading fallback={<p>wait</p>}>
+        <p onClick={() => setId(id() + 1)}>{user()} {size()}</p>
+      </Loading>
+    </Errored>
+  );
+}
+`, has: [
+    'source user = await fetch("u:" + id) -> "nobody"',
+    'size = await fetch("s:" + id) -> 10 catch (e) => 0',
+  ] },
+  // a builtin under another name is imported so from the prelude; a keyed optimistic store keeps its key (ST-4); a
+  // loop body with its own equations keeps them in the loop
+  "a prelude alias, a keyed store and a loop with equations": { solid: `import { action, createMemo, createOptimisticStore, createSignal, Errored, For, Loading } from "solid-js";
+import { fetchIssues } from "./api";
+
+const keep = filter;
+
+export default function App() {
+  const [shown, setShown] = createSignal("open");
+  const [issues, setIssues] = createOptimisticStore(() => fetchIssues(shown()), [], { key: "id" });
+  const drop = action(function* (id: number) {
+    setIssues(() => keep(issues, (t) => t.id !== id));
+  });
+  return (
+    <Errored fallback={(e) => <p>{e().message}</p>}>
+      <Loading fallback={<p>wait</p>}>
+        <ul>
+          <For each={issues}>
+            {(issue) => {
+              const label = createMemo(() => issue.title + " (" + shown() + ")");
+              return <li onClick={() => drop(issue.id)}>{label()}</li>;
+            }}
+          </For>
+        </ul>
+      </Loading>
+    </Errored>
+  );
+}
+`, has: [
+    'import pure { filter as keep } from "./prelude"',
+    "source issues key id = ",
+    "{for issue in issues {",
+    'label = issue.title + " (" + shown + ")"',
   ] },
   refused: { solid: `import { createSignal, createEffect, createMemo } from "solid-js";
 

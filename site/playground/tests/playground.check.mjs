@@ -175,6 +175,25 @@ await check("a program of two .rx modules shows both, and adding a file is kept 
   assert(page.url().includes("#code="), `the added file is not in the URL: ${page.url()}`);
 });
 
+await check("turning a two-module program around and back reads a source from the other module as itself", async () => {
+  await page.getByTestId("example").selectOption("source");
+  page.once("dialog", (d) => d.accept("store.rx"));
+  await page.getByTitle("Add a file").click();
+  await type(`export source count := 1\n\nexport action more() {\n  count := count + 1\n}\n`);
+  await page.getByRole("button", { name: "main.rx", exact: true }).click();
+  const program = `import { count, more } from "./store.rx"\n\nexport default component App() {\n  doubled = count * 2\n  <p onClick={() => { more() }}>{count} {doubled}</p>\n}\n`;
+  await type(program);
+  await js.getByText("// /store.rx", { exact: false }).waitFor({ timeout: 5000 });
+  await page.getByTestId("mode").click();
+  await page.getByTestId("rx-out").getByText("doubled = count * 2", { exact: false }).first().waitFor({ timeout: 5000 });
+  await page.waitForTimeout(300);
+  await page.getByTestId("mode").click();
+  await editor.waitFor({ timeout: 5000 });
+  const rx = await editor.inputValue();
+  assert(rx.includes("doubled = count * 2") && rx.includes("{count} {doubled}") && !rx.includes("count()"), `the import is read as a call:\n${rx}`);
+  assert(!(await codes()).length, `codes: ${await codes()}`);
+});
+
 await check("Solid → .rx reads the Solid view back as .rx, lists what it cannot read", async () => {
   await page.getByTestId("example").selectOption("await");
   await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
@@ -396,6 +415,15 @@ await check("typed errors read as error classes and instanceof, and a context as
   for (const want of ["class Big extends Error {", "if (n > 3) throw new Big(n);", "if (!(e() instanceof Big)) throw e();", 'createContext(() => "light")', "const t = useContext(ThemeContext);", "<ThemeContext value={() => (n() > 1 ? \"dark\" : \"light\")}>"])
     assert(text.includes(want), `missing ${want}:\n${text}`);
   assert(!text.includes("__rt") && !text.includes("__B"), `the runtime is left:\n${text}`);
+});
+
+await check("a first paint reads as loadingValue, and a catch on an await as the promise's catch", async () => {
+  await type(`export default component App() {\n  source id := 1\n  name = await fetch("u:" + id) -> "nobody"\n  size = await fetch("s:" + id) -> 10 catch (e) => 0\n  {errored fallback(e) { <p>{e.message}</p> } {\n    <p onClick={() => { id := id + 1 }}>{name} {size}</p>\n  }}\n}\n`);
+  assert((await codes()).length === 0, `codes: ${await codes()}`);
+  await js.getByText("loadingValue", { exact: false }).first().waitFor({ timeout: 5000 });
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  for (const want of ['{ loadingValue: "nobody" }', ".catch((e) => 0)", "if (e instanceof NotReadyError) throw e;"]) assert(text.includes(want), `missing ${want}:\n${text}`);
+  assert(!text.includes("__rt"), `the runtime is left:\n${text}`);
 });
 
 await check("no uncaught page errors", async () => {

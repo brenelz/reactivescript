@@ -12,7 +12,7 @@ function target(line: string): { name: string; provide?: boolean } | { block: st
   let m: RegExpExecArray | null;
   if ((m = /^const \[(\w+?)(?:\$truth)?, \w+\] = create(?:Signal|Store|OptimisticStore|Optimistic)\(/.exec(l))) return { name: m[1] };
   if ((m = /^const (\w+)Context = createContext\(/.exec(l))) return { name: lower(m[1]) };
-  if ((m = /^const (\w+?)(?:\$await\d*|\$answer)? = (?:createMemo|createDeferred|createProjection|omit|useContext|action)\(/.exec(l))) return { name: m[1] };
+  if ((m = /^const (?:i\$)?(\w+?)(?:\$await\d*|\$answer)? = (?:createMemo|createDeferred|createProjection|omit|useContext|action)\(/.exec(l))) return { name: m[1] };
   if ((m = /^(?:async )?function (\w+)\(/.exec(l))) return { name: m[1] };
   if ((m = /^class (\w+) extends Error\b/.exec(l))) return { name: m[1] };
   if ((m = /^<(\w+)Context value=/.exec(l))) return { name: lower(m[1]), provide: true };

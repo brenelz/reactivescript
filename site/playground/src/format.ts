@@ -58,13 +58,28 @@ export async function formatSolid(raw: string): Promise<{ code: string; error?: 
 }
 
 /** Solid 2.0 written back as .rx (`toRx`), over the Babel parser Prettier carries. */
-export async function solidToRx(code: string): Promise<{ code: string; problems: RxProblem[]; files: Record<string, string> }> {
+export async function solidToRx(code: string, views: Record<string, string> = {}): Promise<{ code: string; problems: RxProblem[]; files: Record<string, string> }> {
   const babel = await import("prettier/plugins/babel");
+  const parse = (src: string) => (babel as any).parsers["babel-ts"].parse(src, {});
   let ast;
   try {
-    ast = (babel as any).parsers["babel-ts"].parse(code, {});
+    ast = parse(code);
   } catch (e: any) {
     return { code: "", problems: [{ line: e?.loc?.start?.line ?? e?.loc?.line ?? 0, message: String(e?.message ?? e).split("\n")[0] }], files: {} };
   }
-  return toRx(ast, code);
+  // the program's other modules, by the path an import names them, so a source read from one reads as itself
+  const parsed = new Map<string, unknown>();
+  const modules = (from: string) => {
+    const view = views[from.replace(/^\.\//, "")];
+    if (view === undefined) return;
+    if (!parsed.has(from)) {
+      try {
+        parsed.set(from, parse(view));
+      } catch {
+        parsed.set(from, undefined);
+      }
+    }
+    return parsed.get(from) as any;
+  };
+  return toRx(ast, code, { modules });
 }

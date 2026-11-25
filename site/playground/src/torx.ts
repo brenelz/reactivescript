@@ -42,7 +42,10 @@ export function declaredIn(drx: string): Map<string, "pure" | "io" | "type"> {
   return m;
 }
 
-export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {}): { code: string; problems: RxProblem[]; files: Record<string, string> } {
+/** Another module's Solid view, parsed, by the path an import names; undefined when it is not one of the program's. */
+export type Modules = (from: string) => Node | undefined;
+
+export function toRx(ast: Node, src: string, opts: { declared?: Declared; modules?: Modules } = {}): { code: string; problems: RxProblem[]; files: Record<string, string> } {
   const problems: RxProblem[] = [];
   const scopes: Map<string, Binding>[] = [new Map()];
   const pureImports = new Set<string>(); // by local name: what reactive scope reads is imported pure, the rest is io
@@ -96,6 +99,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   /** `ThemeContext` is the context .rx calls `theme`. */
   const contextName = (js: string) => js.replace(/Context$/, "").replace(/^./, (c) => c.toLowerCase()) || js;
   const renamed = new Map<string, string>(); // an imported context: its .rx name
+  const preludeAliases = new Set<string>(); // `const keep = filter`: a builtin imported under another name (09)
   /** The .rx name of the context `n` names, or undefined if it is not one. */
   const contextOf = (n: Node | undefined): string | undefined => {
     if (n?.type !== "Identifier") return;
@@ -119,6 +123,73 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     };
     return walk(t.argument) ? out : undefined;
   };
+  /** What another module exports, read from its Solid view as this module's own declarations are read. */
+  const exportedKinds = (mod: Node): Map<string, Binding> => {
+    const out = new Map<string, Binding>();
+    for (const st of mod.program.body as Node[]) {
+      const d = st.type === "ExportNamedDeclaration" ? st.declaration : undefined;
+      if (d?.type === "ClassDeclaration" && d.superClass?.type === "Identifier" && d.superClass.name === "Error") out.set(d.id.name, { kind: "error" });
+      if (d?.type !== "VariableDeclaration") continue;
+      for (const v of d.declarations as Node[]) {
+        const name = callee(v.init);
+        const get = v.id.type === "ArrayPattern" ? v.id.elements[0]?.name : v.id.type === "Identifier" ? v.id.name : undefined;
+        if (!get) continue;
+        if (v.id.type === "ArrayPattern" && (name === "createSignal" || name === "createOptimistic")) out.set(get, { kind: "read" });
+        else if (v.id.type === "ArrayPattern" && (name === "createStore" || name === "createOptimisticStore")) out.set(get, { kind: "store" });
+        else if (v.id.type === "Identifier" && (name === "createMemo" || name === "createDeferred")) out.set(get, { kind: "read" });
+        else if (v.id.type === "Identifier" && (name === "createProjection" || name === "omit")) out.set(get, { kind: "store" });
+        else if (v.id.type === "Identifier" && name === "createContext") out.set(get, { kind: "context", as: contextName(get) });
+      }
+    }
+    return out;
+  };
+
+  /** `{ loadingValue: v }` among a primitive's options: `-> v`, the first paint (R-7). */
+  const paintOf = (o: Node | undefined): Node | undefined =>
+    o?.type === "ObjectExpression" ? o.properties.find((q: Node) => q.type === "ObjectProperty" && !q.computed && (q.key.name ?? q.key.value) === "loadingValue")?.value : undefined;
+  let paint: string | undefined; // a first paint for the `.catch` about to be read: it goes between the await and the catch
+  /** `(e) => alt`, or `(e) => { if (!(e instanceof A)) throw e; return alt }`: a catch clause (R-f-4, 07). */
+  const catchClause = (f: Node | undefined): { p: string; classes?: string[]; alt: Node } | undefined => {
+    if (!isFn(f) || f!.params.length !== 1 || f!.params[0].type !== "Identifier") return;
+    const p = f!.params[0].name as string;
+    if (f!.body.type !== "BlockStatement") return { p, alt: f!.body };
+    const st: Node[] = f!.body.body;
+    const classes = st.length === 2 && st[1].type === "ReturnStatement" && st[1].argument ? rethrows(st[0], p, false) : undefined;
+    return classes ? { p, classes, alt: st[1].argument } : undefined;
+  };
+  const clause = (c: { p: string; classes?: string[]; alt: Node }) => {
+    scopes.push(new Map([[c.p, { kind: "plain" } as Binding]]));
+    const alt = expr(c.alt);
+    scopes.pop();
+    return `catch (${c.p}${c.classes ? `: ${c.classes.join(" | ")}` : ""}) => ${alt}`;
+  };
+  /** `createMemo(() => { try { return x } catch (e) { if (e instanceof NotReadyError || …) throw e; return alt } })`: `x catch (e) => alt`. */
+  const caughtMemo = (f: Node | undefined): { x: Node; c: { p: string; classes?: string[]; alt: Node } } | undefined => {
+    const t = isFn(f) && f!.body.type === "BlockStatement" && f!.body.body.length === 1 ? f!.body.body[0] : undefined;
+    const ret = t?.type === "TryStatement" && !t.finalizer && t.block.body.length === 1 ? t.block.body[0] : undefined;
+    const h = t?.handler;
+    if (ret?.type !== "ReturnStatement" || !ret.argument || h?.param?.type !== "Identifier" || h.body.body.length !== 2 || h.body.body[1].type !== "ReturnStatement") return;
+    const p = h.param.name as string;
+    const first: Node = h.body.body[0];
+    const then = first.type === "IfStatement" && !first.alternate ? (first.consequent.type === "BlockStatement" && first.consequent.body.length === 1 ? first.consequent.body[0] : first.consequent) : undefined;
+    if (then?.type !== "ThrowStatement" || unwrap(then.argument).name !== p) return;
+    const parts: Node[] = [];
+    const flat = (x: Node): void => {
+      x = unwrap(x);
+      if (x.type === "LogicalExpression" && x.operator === "||") flat(x.left), flat(x.right);
+      else parts.push(x);
+    };
+    flat(first.test);
+    const ready = parts[0];
+    if (!(ready?.type === "BinaryExpression" && ready.operator === "instanceof" && unwrap(ready.left).name === p && ready.right.name === "NotReadyError")) return;
+    let classes: string[] | undefined;
+    if (parts.length === 2) {
+      classes = rethrows({ ...first, test: parts[1], consequent: then }, p, false);
+      if (!classes) return;
+    } else if (parts.length !== 1) return;
+    return { x: ret.argument, c: { p, classes, alt: h.body.body[1].argument } };
+  };
+
   /** `class E extends Error { constructor(a) { super(m); this.name = "E"; this.a = a; } }` as `error E(a) => m`. */
   function errorDecl(c: Node): string[] {
     const name = c.id.name as string;
@@ -218,6 +289,15 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       const m = n.callee.property.name as string;
       // `console.log(…)` is .rx's log: a builtin, where `console` itself would have to be imported
       if (m === "log" && n.callee.object.type === "Identifier" && n.callee.object.name === "console" && !lookup("console")) return `log(${n.arguments.map((x: Node) => expr(x)).join(", ")})`;
+      const cc = m === "catch" && !imperative && n.arguments.length === 1 ? catchClause(n.arguments[0]) : undefined;
+      if (cc) {
+        const at = paint;
+        paint = undefined;
+        awaiting.add(n.callee.object);
+        const on = expr(n.callee.object, n).replace(/^await\s+/, "");
+        const s = `await ${on}${at ? ` -> ${at}` : ""} ${clause(cc)}`;
+        return tight ? `(${s})` : s;
+      }
       if (m === "then" || m === "catch" || m === "finally") return fail(n, `.${m}(…): .rx has no promise chaining; an action's failure is caught in its body, try { … } catch (e) { … }`);
       const o = n.callee.object.type === "Identifier" ? lookup(n.callee.object.name) : undefined;
       if (o?.kind === "import" && o.asyncMembers?.has(m) && !imperative && !awaiting.has(n) && !(parent && /Await|Yield/.test(parent.type))) {
@@ -771,9 +851,11 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       const each = valueOf(attrOf(el, "each"));
       const f = el.children.map((c: Node) => (c.type === "JSXExpressionContainer" ? unwrap(c.expression) : c)).find(isFn);
       const b = f && returned(f);
-      if (!each || !b || f.params.length !== 1 || f.params[0].type !== "Identifier") return fail(el, "<For> needs each and one (item) => … child"), [];
+      // a body with declarations before its view: the loop's own equations, as `{for x in xs { y = …; <li /> }}`
+      const block = f && !b && f.body.type === "BlockStatement" && f.body.body[f.body.body.length - 1]?.type === "ReturnStatement";
+      if (!each || !(b || block) || f.params.length !== 1 || f.params[0].type !== "Identifier") return fail(el, "<For> needs each and one (item) => … child"), [];
       scopes.push(new Map([[f.params[0].name, { kind: "plain" } as Binding]]));
-      const lines = markup([unwrap(b)]);
+      const lines = b ? markup([unwrap(b)]) : region(f);
       scopes.pop();
       const loop = [`{for ${f.params[0].name} in ${expr(each)} {`, ...indented(lines, INDENT), "}}"];
       // .rx's for has no fallback: the empty list is an if
@@ -997,7 +1079,12 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
         if (name === "createSignal") {
           const truth = /^(.+)\$truth$/.exec(get);
           // `createSignal(fn)`: a source with a question. The view's `x$truth` is one whose question is asked: an await
-          if (isFn(a[0]) || byName(a[0])) return `source ${truth ? truth[1] : get}${typeArg(init!)} = ${question(a[0], !!truth)}`.split("\n");
+          if (isFn(a[0]) || byName(a[0])) {
+            const v = paintOf(a[1]);
+            // a first paint stands for an answer still to come: the question is an await
+            const q = question(a[0], !!truth || !!v);
+            return `source ${truth ? truth[1] : get}${typeArg(init!)} = ${q}${v ? ` -> ${expr(v)}` : ""}`.split("\n");
+          }
           return `source ${get}${typeArg(init!)} := ${a[0] ? first(a[0]) : "undefined"}`.split("\n");
         }
         if (name === "createStore") {
@@ -1008,7 +1095,10 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
           const e = isFn(a[0]) ? returned(a[0]) : undefined;
           // over `x$truth`: the pair is one source, declared where its truth is
           if (e && callee(e) === `${get}$truth`) return [];
-          if (isFn(a[0])) return `source ${get}${typeArg(init!)} = ${question(a[0], false)}`.split("\n");
+          // `{ key: "id" }`: each row keeps its identity by that field (ST-4)
+          const k = a[2]?.type === "ObjectExpression" ? a[2].properties.find((q: Node) => q.type === "ObjectProperty" && (q.key.name ?? q.key.value) === "key")?.value : undefined;
+          const keyed = k?.type === "StringLiteral" && /^[A-Za-z_$][\w$]*$/.test(k.value) ? ` key ${k.value}` : "";
+          if (isFn(a[0])) return `source ${get}${typeArg(init!)}${keyed} = ${question(a[0], false)}`.split("\n");
           // over a plain value: a source whose question is that constant, which is what can take a guess (ST-5c)
           return `source ${get}${typeArg(init!)} = ${a[0] ? expr(a[0]) : "undefined"}`.split("\n");
         }
@@ -1030,9 +1120,42 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
         return e ? `deferred ${id} = ${expr(e)}`.split("\n") : (fail(d, `${id}: a deferred value with statements; .rx equations are one expression`), []);
       }
       if (name === "createMemo" && byName(a[0])) return `${id} = ${asked(a[0])}`.split("\n");
+      if (name === "createMemo" && caughtMemo(a[0])) {
+        const { x, c } = caughtMemo(a[0])!;
+        const text = expr(x);
+        const tail = clause(c);
+        // the await's own catch already says it: `await e -> v catch (e) => alt` is one clause
+        return `${id} = ${text.endsWith(tail) ? text : `${text} ${tail}`}`.split("\n");
+      }
+      if (name === "createMemo" && paintOf(a[1])) {
+        const e = returned(a[0]);
+        if (!e) return fail(d, `${id}: a memo with statements; .rx equations are one expression`), [];
+        const v = expr(paintOf(a[1])!);
+        const u = unwrap(e);
+        const caught = /CallExpression$/.test(u.type) && /MemberExpression$/.test(u.callee.type) && u.callee.property.name === "catch";
+        if (caught) paint = v;
+        let text = expr(e);
+        paint = undefined;
+        // a first paint stands for an answer still to come: with no await written, the call that asks it is one, on
+        // whichever branch it sits
+        const asked = (x: Node): string => {
+          const w = unwrap(x);
+          if (w.type === "ConditionalExpression") return `${expr(w.test)} ? ${asked(w.consequent)} : ${asked(w.alternate)}`;
+          return /Call/.test(w.type) ? `await ${expr(w)}` : expr(w);
+        };
+        if (!caught) text = `${/\bawait\b/.test(text) ? text : asked(u)} -> ${v}`;
+        // `i$x`: the answer a caught read of x reads, written back where it is read
+        if (/^i\$[\w$]+$/.test(id)) return bind(id, { kind: "await", text }), [];
+        return `${id} = ${text}`.split("\n");
+      }
       if (name === "createMemo") {
         const e = returned(a[0]);
         if (!e) return fail(d, `${id}: a memo with statements; .rx equations are one expression`), [];
+        // `i$x`: the answer a caught read of x reads, written back where it is read
+        if (/^i\$[\w$]+$/.test(id)) {
+          const t = expr(e);
+          return bind(id, { kind: "await", text: /^await\b/.test(t) || !/Call/.test(unwrap(e).type) ? t : `await ${t}` }), [];
+        }
         if (/\$await\d*$/.test(id)) {
           // an await under a condition is asked only on its branch: `c ? ask : undefined`, read where c holds
           const u = unwrap(e);
@@ -1096,6 +1219,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       }
       if (h?.kind === "handler") return actionDecl(id, h.fn);
       if (h?.kind === "mutable") return `source ${id}${d.id.typeAnnotation ? text(d.id.typeAnnotation) : ""} := ${first(init)}`.split("\n");
+      if (init.type === "Identifier" && RX_BUILTINS.has(init.name) && !lookup(init.name)) return preludeAliases.add(`${init.name} as ${id}`), [];
       if (isFn(init)) return fnDecl(id, init);
       return `${id}${d.id.typeAnnotation ? text(d.id.typeAnnotation) : ""} = ${expr(init)}`.split("\n");
     });
@@ -1150,10 +1274,13 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   /** A context's provider element: its .rx name, the value given, and what it wraps. */
   function provider(el: Node | undefined): { name: string; value: string; kids: Node[] } | undefined {
     if (el?.type !== "JSXElement" || el.openingElement.name.type !== "JSXIdentifier") return;
-    const c = contextOf({ ...el.openingElement.name, type: "Identifier" });
     const attrs = el.openingElement.attributes;
     const v = valueOf(attrOf(el, "value"));
-    if (!c || attrs.length !== 1 || !v) return;
+    const tag = el.openingElement.name.name as string;
+    // an imported component is not a context: only an import named …Context, given only a value, is read as one
+    if (attrs.length !== 1 || !v || (lookup(tag)?.kind === "import" && !/Context$/.test(tag))) return;
+    const c = contextOf({ ...el.openingElement.name, type: "Identifier" });
+    if (!c) return;
     const f = unwrap(v);
     const value = isFn(f) && !f.params.length && returned(f) ? expr(returned(f)!) : f.type === "Identifier" && lookup(f.name)?.kind === "read" ? (reactive++, f.name) : expr(f);
     const kids = el.children.filter((k: Node) => !(k.type === "JSXText" && !k.value.trim()));
@@ -1181,10 +1308,13 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     });
     let root = view?.type === "ReturnStatement" && view.argument ? unwrap(view.argument) : undefined;
     // `<C value={v}>…</C>` around the whole view: `provide c = v` (07)
+    // the first provide is the innermost provider: read from the outside, they come last first
+    const provides: string[] = [];
     for (let p = provider(root); p; p = provider(root)) {
-      lines.push(`provide ${p.name} = ${p.value}`);
+      provides.unshift(`provide ${p.name} = ${p.value}`);
       root = p.kids.length === 1 ? p.kids[0] : { ...root!, type: "JSXFragment", children: p.kids };
     }
+    lines.push(...provides);
     const out = markup(root ? (root.type === "JSXFragment" ? root.children : [root]) : []);
     if (view?.type !== "ReturnStatement") fail(view ?? f, `${name}: a component ends with one return of its markup`);
     scopes.pop();
@@ -1247,7 +1377,14 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   const decls = tops.map((t) => t.d);
   for (const s of program) {
     if (s.type !== "ImportDeclaration") continue;
-    for (const sp of s.specifiers) bind(sp.local.name, SOLID.has(s.source.value) ? { kind: "plain" } : { kind: "import", from: s.source.value });
+    // a name another module of the program exports is what it is there: a source or a memo is read as itself (09)
+    const mod = SOLID.has(s.source.value) ? undefined : opts.modules?.(s.source.value);
+    const kinds = mod ? exportedKinds(mod) : undefined;
+    for (const sp of s.specifiers) {
+      const k = sp.type === "ImportSpecifier" ? kinds?.get(sp.imported.name) : undefined;
+      if (k?.kind === "context") renamed.set(sp.local.name, k.as);
+      bind(sp.local.name, SOLID.has(s.source.value) ? { kind: "plain" } : k ?? { kind: "import", from: s.source.value });
+    }
   }
   declare(decls);
 
@@ -1298,7 +1435,9 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   const comps = rxTops.flatMap((t) => t.comps.map(([name]) => name));
   // a module that exports its components by name has no default of its own
   const unnamed = rxTops.filter((t) => t.s.type !== "ExportNamedDeclaration").flatMap((t) => t.comps.map(([name]) => name));
-  if (!defaultName) defaultName = comps.includes(mounted) ? mounted : comps.includes("App") ? "App" : unnamed[unnamed.length - 1] ?? "";
+  // a module that exports names is another module's: it has no default of its own unless it says so
+  const named = program.some((st) => st.type === "ExportNamedDeclaration");
+  if (!defaultName) defaultName = comps.includes(mounted) ? mounted : comps.includes("App") ? "App" : named ? "" : unnamed[unnamed.length - 1] ?? "";
   // `function Root() { return <C value={v}><App /></C> }` as the default: a module-level `provide c = v`, and App the default
   let rootOf: Node | undefined;
   const provided: string[] = [];
@@ -1307,7 +1446,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   if (rootFn && !rootFn.params.length && rootBody.length === 1 && rootBody[0].type === "ReturnStatement" && rootBody[0].argument) {
     let el: Node | undefined = unwrap(rootBody[0].argument);
     const lines: string[] = [];
-    for (let p = provider(el); p; p = provider(el)) lines.push(`provide ${p.name} = ${p.value}`), (el = p.kids.length === 1 ? unwrap(p.kids[0]) : undefined);
+    for (let p = provider(el); p; p = provider(el)) lines.unshift(`provide ${p.name} = ${p.value}`), (el = p.kids.length === 1 ? unwrap(p.kids[0]) : undefined);
     const inner = el?.type === "JSXElement" && el.openingElement.selfClosing && el.openingElement.name.type === "JSXIdentifier" ? (el.openingElement.name.name as string) : "";
     const bare = el?.openingElement?.attributes.every((a: Node) => a.type === "JSXAttribute" && a.name.name === "children");
     if (lines.length && comps.includes(inner) && inner !== defaultName && bare) (rootOf = rootFn), provided.push(...lines), (defaultName = inner);
@@ -1315,7 +1454,10 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
 
   const out: string[][] = [];
   for (const t of rxTops) {
-    const exported = t.s.type === "ExportNamedDeclaration" ? "export " : "";
+    // `x$truth` declares the source; it is exported when its optimistic layer, `x`, is
+    const truth = t.d.type === "VariableDeclaration" ? (/^(.+)\$truth$/.exec(t.d.declarations[0]?.id?.elements?.[0]?.name ?? "")?.[1] ?? "") : "";
+    const layer = truth && tops.some((o) => o.s.type === "ExportNamedDeclaration" && o.d.type === "VariableDeclaration" && o.d.declarations.some((v: Node) => v.id.elements?.[0]?.name === truth));
+    const exported = t.s.type === "ExportNamedDeclaration" || layer ? "export " : "";
     const notes = leading(t.s, t.from);
     if (t.hook) {
       fail(t.s, `${declared(t.d).join(", ")}: Solid primitives outside a component (a custom hook) have no .rx form in this prototype`);
@@ -1355,7 +1497,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     };
     // another .rx module is named with its extension, or the compiler looks for a JavaScript one
     const at = JSON.stringify(from.replace(/\.(tsx?|jsx?)$/, ""));
-    if (opts.declared) {
+    if (opts.declared && !/\.rx$/.test(from)) {
       // the .d.rx decides: a pure fn imports pure, an io fn and a type do not
       for (const pure of [true, false]) {
         const group = used.filter((sp: Node) => (said(sp) === "pure" || (said(sp) === undefined && pureImports.has(sp.local.name))) === pure);
@@ -1376,6 +1518,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   const helpersPure = helperNames.some((n) => pureImports.has(n));
   const pure = [...(helpersPure ? helperNames : []), ...[...globals].filter(([, p]) => p).map(([n]) => n)];
   const io = [...(helpersPure ? [] : helperNames), ...[...globals].filter(([, p]) => !p).map(([n]) => n), ...(assigns ? ["assign"] : [])];
+  if (preludeAliases.size) imports.push(`import pure { ${[...preludeAliases].join(", ")} } from "./prelude"`);
   if (pure.length) imports.push(`import pure { ${pure.join(", ")} } from ${JSON.stringify(helperFrom)}`);
   if (io.length) imports.push(`import { ${io.join(", ")} } from ${JSON.stringify(helperFrom)}`);
 

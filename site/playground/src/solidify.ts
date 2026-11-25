@@ -258,6 +258,50 @@ function errorClasses(code: string): string {
     const cs = /^\[([\w$,\s]+)\]$/.exec(a[1] ?? "");
     return cs ? `(${cs[1].split(",").map((c) => c.trim()).filter(Boolean).map((c) => `${a[0]} instanceof ${c}`).join(" || ")})` : undefined;
   });
+  // `await e -> v` (R-7): Solid's loadingValue. A question only the browser answers (SV-7b) is ssrSource "client"
+  code = eachCall(code, "__rt.firstPaint", (a) => {
+    const f = /^\(\)\s*=>\s*([\s\S]*)$/.exec(a[0] ?? "");
+    return f && !f[1].trim().startsWith("{") ? `{ loadingValue: ${unparen(f[1])} }` : undefined;
+  });
+  code = eachCall(code, "__rt.clientQuestion", (a) => {
+    const o = (a[0] ?? "").trim();
+    if (!o || o === "undefined") return `{ ssrSource: "client" }`;
+    return o.startsWith("{") && o.endsWith("}") ? `{ ${o.slice(1, -1).trim().replace(/,$/, "")}, ssrSource: "client" }` : undefined;
+  });
+  // `x catch (e: C) => alt` (R-f-4, 07): what it matches, as a test on the alternative's parameter
+  const caught = (match: string, alt: string) => {
+    const f = /^\(([\w$]+)\)\s*=>\s*([\s\S]*)$/.exec(alt.trim());
+    const m = /^\(([\w$]+)\)\s*=>\s*([\s\S]*)$/.exec(match.trim());
+    if (!f || !m) return;
+    const p = f[1] === "__e" ? "e" : f[1];
+    const any = /^__rt\.isA\([\w$]+, undefined\)$/.test(m[2].trim());
+    if (!any && /__rt\./.test(m[2])) return;
+    const test = any ? undefined : unparen(m[2].replace(new RegExp(`\\b${m[1].replace(/\$/g, "\\$")}\\b`, "g"), p));
+    return { p, test, body: unparen(f[2].replace(/\b__e\b/g, p)) };
+  };
+  // on an awaited answer: the promise's own catch, which throws the other classes on
+  code = eachCall(code, "__rt.settle", (a) => {
+    const c = caught(a[1] ?? "", a[2] ?? "");
+    if (!c) return undefined;
+    const on = /^[\w$.]+(\([^()]*\))?$/.test(a[0]) ? a[0] : `(${a[0]})`;
+    return c.test ? `${on}.catch((${c.p}) => {\nif (!(${c.test})) throw ${c.p};\nreturn ${c.body};\n})` : `${on}.catch((${c.p}) => ${c.body})`;
+  });
+  // on a read: a try that lets Solid's NotReadyError through, so a pending read stays pending
+  const tried = (f: string, c: NonNullable<ReturnType<typeof caught>>) => {
+    const r = /^\(\)\s*=>\s*([\s\S]*)$/.exec(f.trim());
+    const read = r && !r[1].trim().startsWith("{") ? `return ${r[1]};` : `return (${f})();`;
+    return `try {\n${read}\n} catch (${c.p}) {\nif (${c.p} instanceof NotReadyError${c.test ? ` || !(${c.test})` : ""}) throw ${c.p};\nreturn ${c.body};\n}`;
+  };
+  code = eachCall(code, "__rt.catchMemo", (a) => {
+    const c = caught(a[1] ?? "", a[2] ?? "");
+    return c ? `__rt.memo(null, () => {\n${tried(a[0], c)}\n})` : undefined;
+  });
+  for (const h of ["__rt.catchRead", "__rt.tryCatch"])
+    code = eachCall(code, h, (a) => {
+      const c = caught(a[1] ?? "", a[2] ?? "");
+      return c ? `(() => {\n${tried(a[0], c)}\n})()` : undefined;
+    });
+
   // a typed boundary (R-f-4) is an Errored whose fallback throws other classes on, to the boundary above it
   for (let i = code.indexOf("<__rt.TypedErrored"); i >= 0; i = code.indexOf("<__rt.TypedErrored", i + 1)) {
     let k = i + "<__rt.TypedErrored".length;
@@ -561,6 +605,7 @@ export function solidify(code: string): string {
   // a provided value is an accessor, so `use c` alone is what useContext returns
   code = code.replace(/createMemo\(\(\) => (useContext\([\w$]+\))\(\)\)/g, "$1");
   for (const n of used) if (!new RegExp(`\\b${n}\\(`).test(code)) used.delete(n);
+  if (/\binstanceof NotReadyError\b/.test(code)) used.add("NotReadyError");
   for (const c of ["Errored", "Loading", "For", "Show", "Repeat"]) if (new RegExp(`<${c}[\\s>]`).test(code)) used.add(c);
   const head = used.size ? `import { ${[...used].sort().join(", ")} } from "solid-js";\n` : "";
   return head + code;
