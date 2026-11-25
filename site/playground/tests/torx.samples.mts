@@ -1,4 +1,75 @@
 export const extra: Record<string, string> = {
+  "typed errors": `export error Big(n: number) => \`too big: \${n}\`
+export error Odd(n: number) => \`odd: \${n}\`
+
+fn check(n: number): number => n > 3 ? throw Big(n) : n
+
+export default component App() {
+  source n := 0
+  source note := ""
+  checked = check(n)
+  odd = n % 2 == 1 && n < 3 ? throw Odd(n) : n
+
+  action bump() {
+    try {
+      if (n > 4) { throw Big(n) }
+      n := n + 1
+    } catch (e: Big) {
+      note := e.message
+    }
+  }
+
+  <main>
+    <button onClick={bump}>+</button>
+    <button onClick={() => { n := 0 }}>reset</button>
+    <button onClick={() => { n := n - 1 }}>-</button>
+    <p>{note}</p>
+    {errored fallback(e) { <p>outer {e.message}</p> } {
+      {errored fallback(e: Big) { <p>big {e.message} {e.n}</p> } {
+        <p>{checked} {odd}</p>
+      }}
+    }}
+  </main>
+}
+`,
+  context: `export context theme: string = "light"
+
+component Badge() {
+  t = use theme
+  <span class={t}>{t}</span>
+}
+
+component Nested() {
+  provide theme = "nested"
+  <Badge />
+}
+
+export default component App() {
+  source dark := false
+  provide theme = dark ? "dark" : "light"
+  <div>
+    <button onClick={() => { dark := !dark }}>toggle</button>
+    <Badge />
+    <Nested />
+  </div>
+}
+`,
+  "a module-level provide": `context user: string = "guest"
+source who := "ada"
+provide user = who
+
+component Name() {
+  u = use user
+  <b>{u}</b>
+}
+
+export default component App() {
+  <div>
+    <button onClick={() => { who := who + "!" }}>more</button>
+    <Name />
+  </div>
+}
+`,
   "server functions": `import pure { GET } from "./wrappers"
 import pure { findUser } from "./db"
 import { saveUser } from "./db"
@@ -565,6 +636,86 @@ export default function App() {
     "return value",
     "user = await loadUser(id)",
     "other = await getUser(id)",
+  ] },
+  // an error class is an error declaration; a typed catch and a typed boundary rethrow the other classes (R-f-1, R-f-4,
+  // R-f-6); a function that throws before it returns is a throw expression
+  "typed errors in Solid": { solid: `import { action, createMemo, createSignal, Errored } from "solid-js";
+
+export class TooBig extends Error {
+  constructor(n: number) {
+    super("too big: " + String(n));
+    this.name = "TooBig";
+    this.n = n;
+  }
+}
+
+function check(n: number) {
+  if (n > 3) throw new TooBig(n);
+  return n;
+}
+
+export default function App() {
+  const [n, setN] = createSignal(0);
+  const [note, setNote] = createSignal("");
+  const checked = createMemo(() => check(n()));
+  const bump = action(function* () {
+    try {
+      if (n() > 4) throw new TooBig(n());
+      setN(n() + 1);
+    } catch (e) {
+      if (!(e instanceof TooBig)) throw e;
+      setNote(e.message);
+    }
+  });
+  return (
+    <main>
+      <button onClick={bump}>+</button>
+      <p>{note()}</p>
+      <Errored fallback={(e) => <p>outer {e().message}</p>}>
+        <Errored
+          fallback={(e) => {
+            if (!(e() instanceof TooBig)) throw e();
+            return <p>big {e().n}</p>;
+          }}
+        >
+          <p>{checked()}</p>
+        </Errored>
+      </Errored>
+    </main>
+  );
+}
+`, has: [
+    "export error TooBig(n: number) => \"too big: \" + str(n)",
+    "fn check(n: number) => n > 3 ? throw TooBig(n) : n",
+    "if (n > 4) {",
+    "throw TooBig(n)",
+    "} catch (e: TooBig) {",
+    "{errored fallback(e: TooBig) { <p>big {e.n}</p> } {",
+  ] },
+  // createContext is a context, useContext a use of it, and the context as provider around a view is provide (07)
+  "a context in Solid": { solid: `import { createContext, createSignal, useContext } from "solid-js";
+
+const ThemeContext = createContext<string>(() => "light");
+
+function Badge() {
+  const t = useContext(ThemeContext);
+  return <span class={t()}>{t()}</span>;
+}
+
+export default function App() {
+  const [dark, setDark] = createSignal(false);
+  return (
+    <ThemeContext value={() => (dark() ? "dark" : "light")}>
+      <button onClick={() => setDark(!dark())}>toggle</button>
+      <Badge />
+    </ThemeContext>
+  );
+}
+`, has: [
+    "context theme: string = \"light\"",
+    "t = use theme",
+    "provide theme = dark ? \"dark\" : \"light\"",
+    "<Badge />",
   ] },
   refused: { solid: `import { createSignal, createEffect, createMemo } from "solid-js";
 

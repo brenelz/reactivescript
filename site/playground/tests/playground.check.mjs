@@ -50,16 +50,10 @@ await check("the featured example reads as Solid primitives: two memos for label
   assert(!text.includes("__rt") && !text.includes("_$template"), "runtime or compiled code in the view");
 });
 
-await check("Explain notes each line's .rx form and lists the primitives", async () => {
-  const notes = await page.getByTestId("note").allInnerTexts();
-  assert(notes.some((n) => n.includes("source id := …")), `notes: ${notes.join(" | ")}`);
-  assert(notes.some((n) => n.includes("the await in label") && n.includes("reads id")), `notes: ${notes.join(" | ")}`);
-  assert(notes.some((n) => n.includes("equation label") && n.includes("suffix")), `notes: ${notes.join(" | ")}`);
+await check("the view has no inline notes, and the table under it lists the primitives", async () => {
+  assert((await js.locator(".note").count()) === 0, "a note is shown in the view");
   const table = await page.getByTestId("explain").innerText();
   assert(table.includes("createMemo") && table.includes("an equation x = e"), `table: ${table}`);
-  await page.getByTestId("explain-toggle").uncheck();
-  assert((await page.getByTestId("note").count()) === 0, "notes still shown with Explain off");
-  await page.getByTestId("explain-toggle").check();
 });
 
 await check("an object source reads as createStore", async () => {
@@ -74,7 +68,7 @@ await check("a rest prop reads as omit, spread without a call", async () => {
   const text = await js.innerText();
   assert(text.includes('const rest = omit(props, "label", "tone");') && text.includes("{...rest}"), `no omit:\n${text}`);
   assert(!text.includes("__rt") && !text.includes("rest()"), "omit is wrapped or called");
-  assert((await page.getByTestId("explain").innerText()).includes("omit"), "Explain does not list omit");
+  assert((await page.getByTestId("explain").innerText()).includes("omit"), "the table does not list omit");
 });
 
 await check("an effect reads as createEffect, its inputs named $0 and $1", async () => {
@@ -92,9 +86,6 @@ await check("the projection example reads as createProjection, keyed and draft",
   assert(text.includes('const open = createProjection(() => open$answer(), [], { key: "id" });'), `no keyed projection:\n${text}`);
   assert(text.includes("const marks = createProjection((d) => {") && text.includes("d[String(picked())] = true;"), `no draft projection:\n${text}`);
   assert(text.includes("<For each={open}>"), "the projection is called like a signal");
-  const notes = await page.getByTestId("note").allInnerTexts();
-  assert(notes.some((n) => n.includes("open key id = …")), `notes: ${notes.join(" | ")}`);
-  assert(notes.some((n) => n.includes("marks = draft(pre marks -> seed)")), `notes: ${notes.join(" | ")}`);
 });
 
 await check("typing updates the compiled output live", async () => {
@@ -126,6 +117,24 @@ await check("`double := 4` shows WRITE_TO_NON_SOURCE, with its rule and a guide 
   const row = await page.getByTestId("diagnostics").innerText();
   assert(row.includes("[W-1]") && row.includes("double is an equation"), `row: ${row}`);
   assert(await page.locator(".output.stale").count(), "the output is not marked stale");
+  const under = await page.locator(".editor .sq").allInnerTexts();
+  assert(under.join("").includes("double"), `the problem's span is not underlined: ${JSON.stringify(under)}`);
+});
+
+await check("clicking a line of the Solid view selects the .rx line it came from", async () => {
+  await page.getByTestId("example").selectOption("source");
+  await settle();
+  const picks = [
+    ["const double = createMemo(", "double = count * 2"],
+    ["const [count, setCount] = createSignal(", "source count := 0"],
+  ];
+  for (const [view, rx] of picks) {
+    await js.locator(".cl.link", { hasText: view }).first().click();
+    await page.waitForTimeout(100);
+    const picked = await editor.evaluate((el) => el.value.slice(el.selectionStart, el.selectionEnd));
+    assert(picked.trim().startsWith(rx), `clicking ${view} selected: ${JSON.stringify(picked)}`);
+  }
+  assert((await js.locator(".cl.on").count()) === 1, "the clicked line is not marked");
 });
 
 await check("every example compiles and reads as Solid primitives", async () => {
@@ -166,7 +175,7 @@ await check("a program of two .rx modules shows both, and adding a file is kept 
   assert(page.url().includes("#code="), `the added file is not in the URL: ${page.url()}`);
 });
 
-await check("Solid → .rx reads the Solid view back as .rx, lists what it cannot read, and hands the .rx to the editor", async () => {
+await check("Solid → .rx reads the Solid view back as .rx, lists what it cannot read", async () => {
   await page.getByTestId("example").selectOption("await");
   await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
   await page.getByTestId("mode").click();
@@ -178,7 +187,6 @@ await check("Solid → .rx reads the Solid view back as .rx, lists what it canno
   const solidEditor = page.getByTestId("solid-editor");
   await solidEditor.fill(`import { createSignal, createRenderEffect } from "solid-js";\nexport default function App() {\n  const [n, setN] = createSignal(0);\n  createRenderEffect(() => n(), (v) => console.log(v));\n  return <p onClick={() => setN(n() + 1)}>{n()}</p>;\n}\n`);
   await page.getByTestId("rx-problems").getByText("render effect", { exact: false }).first().waitFor({ timeout: 5000 });
-  assert(await page.getByTestId("use-rx").isDisabled(), "an incomplete result can be opened in the editor");
   await solidEditor.fill(`import { createSignal, createMemo } from "solid-js";\nexport default function Counter() {\n  const [count, setCount] = createSignal(0);\n  const doubled = createMemo(() => count() * 2);\n  return <button onClick={() => setCount(count() + 1)}>{doubled()}</button>;\n}\n`);
   await out.getByText("doubled = count * 2", { exact: false }).first().waitFor({ timeout: 5000 });
   // plain TypeScript beside the component moves to helpers.ts, and comes along into the editor
@@ -188,10 +196,30 @@ await check("Solid → .rx reads the Solid view back as .rx, lists what it canno
   assert((await page.getByTestId("rx-check").innerText()).includes("UNHANDLED_FAILURE"), "the checker does not ask for a boundary");
   await solidEditor.fill(`import { createSignal, createMemo } from "solid-js";\nexport default function Counter() {\n  const [count, setCount] = createSignal(0);\n  const doubled = createMemo(() => count() * 2);\n  return <button onClick={() => setCount(count() + 1)}>{doubled()}</button>;\n}\n`);
   await out.getByText("doubled = count * 2", { exact: false }).first().waitFor({ timeout: 5000 });
-  await page.getByTestId("use-rx").click();
+  // turning the page back puts the .rx it read in the editor, and the Solid view of it on the right
+  await page.getByTestId("mode").click();
+  await editor.waitFor({ timeout: 5000 });
   rx = await editor.inputValue();
   assert(rx.includes("source count := 0") && rx.includes("onClick={() => { count := count + 1 }}"), `the editor did not get the .rx:\n${rx}`);
   await js.getByText("const doubled = createMemo", { exact: false }).first().waitFor({ timeout: 5000 });
+});
+
+await check("the Solid → .rx side is kept in the URL, so a reload opens the page the same way round", async () => {
+  await page.getByTestId("example").selectOption("source");
+  await settle();
+  await page.getByTestId("mode").click();
+  const src = `import { createSignal } from "solid-js";\nexport default function Kept() {\n  const [kept, setKept] = createSignal(7);\n  return <p onClick={() => setKept(kept() + 1)}>{kept()}</p>;\n}\n`;
+  await page.getByTestId("solid-editor").fill(src);
+  await page.waitForTimeout(600);
+  await page.reload();
+  await page.getByTestId("solid-editor").waitFor({ timeout: 10000 });
+  assert((await page.getByTestId("solid-editor").inputValue()) === src, "the Solid source did not come back");
+  await page.getByTestId("rx-out").getByText("source kept := 7", { exact: false }).first().waitFor({ timeout: 5000 });
+  await page.getByTestId("mode").click();
+  await page.waitForTimeout(600);
+  await page.reload();
+  await editor.waitFor({ timeout: 10000 });
+  assert(!(await page.getByTestId("solid-editor").isVisible()), "the page did not stay turned back after a reload");
 });
 
 await check("hovering a name shows its type, and an attribute its documentation", async () => {
@@ -326,28 +354,6 @@ await check("the Solid pane has TypeScript too: an accessor's type on hover, and
   await page.getByTestId("mode").click();
 });
 
-await check("Open in Solid Playground carries the view as tabs, with what it imports and its scoped styles", async () => {
-  // what the link's hash holds, read back the way the Solid playground reads it
-  const tabs = async () => {
-    const href = await page.getByTestId("open-solid").getAttribute("href");
-    assert(href?.startsWith("https://playground.solidjs.com/#"), `no link: ${href}`);
-    const { decompressFromURL } = await import("@amoutonbrady/lz-string");
-    return JSON.parse(decompressFromURL(href.slice(href.indexOf("#") + 1)));
-  };
-  await page.getByTestId("example").selectOption("await");
-  await js.getByText("label$await", { exact: false }).first().waitFor({ timeout: 5000 });
-  await settle();
-  let t = await tabs();
-  assert(t.map((x) => x.name).join() === "main.tsx,users.jsx", `tabs: ${t.map((x) => x.name)}`);
-  assert(t[0].source.startsWith('import { render } from "@solidjs/web";') && t[0].source.includes('render(() => <App />, document.getElementById("app")!);') && !t[0].source.includes("export default"), `main.tsx does not mount the view:\n${t[0].source}`);
-  assert(t[0].source.includes("opacity: 0.5") && t[1].source.includes("export async function fetchUser"), "the styles or the imported module are missing");
-  // a program that would not run there has no link, and says why
-  await type(`import { report } from "./io"\nexport default component App() {\n  source n := 0\n  <p onClick={() => { report(n) }}>{n}</p>\n}\n`);
-  await page.locator("span[data-testid=open-solid]").waitFor({ timeout: 5000 });
-  const why = await page.getByTestId("open-solid").getAttribute("title");
-  assert(why.includes("./io"), `the reason does not name the missing module: ${why}`);
-});
-
 await check("log is offered as a built-in, and reads as console.log in the Solid view", async () => {
   const program = `export default component App() {\n  source n := 0\n  <p onClick={() => {  }}>{n}</p>\n}\n`;
   await type(program);
@@ -365,7 +371,6 @@ await check("log is offered as a built-in, and reads as console.log in the Solid
   await js.getByText("console.log", { exact: false }).first().waitFor({ timeout: 5000 });
   const text = (await js.innerText()).replace(/\s+/g, " ");
   assert(text.includes('console.log("clicked", untrack(n));') && !text.includes("__"), `log in the view:\n${text}`);
-  await page.locator("a[data-testid=open-solid]").waitFor({ timeout: 5000 });
 });
 
 await check("a server fn reads as a \"use server\" function, its awaits and imports as written", async () => {
@@ -382,6 +387,15 @@ await check("a fallback with no error name and a branch with its own names show 
   const text = (await js.innerText()).replace(/\s+/g, " ");
   assert(text.includes("<Errored fallback={<p>Failed</p>}>") && text.includes("{() => {"), `the placeholders:\n${text}`);
   assert(!text.includes("__err") && !text.includes("__item"), `a placeholder is left:\n${text}`);
+});
+
+await check("typed errors read as error classes and instanceof, and a context as createContext and its provider", async () => {
+  await type(`export error Big(n: number) => \`too big: \${n}\`\n\nexport context theme: string = "light"\n\nfn check(n: number) => n > 3 ? throw Big(n) : n\n\ncomponent Badge() {\n  t = use theme\n  <span>{t}</span>\n}\n\nexport default component App() {\n  source n := 0\n  checked = check(n)\n  provide theme = n > 1 ? "dark" : "light"\n  <main>\n    <button onClick={() => { n := n + 1 }}>+</button>\n    {errored fallback(e) { <p>{e.message}</p> } {\n      {errored fallback(e: Big) { <p>big {e.n}</p> } { <p>{checked}</p> }}\n    }}\n    <Badge />\n  </main>\n}\n`);
+  await js.getByText("createContext", { exact: false }).first().waitFor({ timeout: 5000 });
+  const text = (await js.innerText()).replace(/\s+/g, " ");
+  for (const want of ["class Big extends Error {", "if (n > 3) throw new Big(n);", "if (!(e() instanceof Big)) throw e();", 'createContext(() => "light")', "const t = useContext(ThemeContext);", "<ThemeContext value={() => (n() > 1 ? \"dark\" : \"light\")}>"])
+    assert(text.includes(want), `missing ${want}:\n${text}`);
+  assert(!text.includes("__rt") && !text.includes("__B"), `the runtime is left:\n${text}`);
 });
 
 await check("no uncaught page errors", async () => {

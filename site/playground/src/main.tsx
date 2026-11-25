@@ -2,12 +2,12 @@ import { render } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { compile, ENTRY, init, type Diagnostic } from "./compile";
 import { highlight, highlightRx } from "./highlight";
-import { noteFor, primsIn } from "./explain";
+import { linkLines } from "./link";
+import { primsIn } from "./explain";
 import { presets } from "./presets";
 import { decode, encode } from "./share";
 import { formatSolid, solidToRx } from "./format";
 import { HELPERS, type RxProblem } from "./torx";
-import { solidPlaygroundUrl, solidTabs } from "./solidplay";
 import { completeAt, completeAtSolid, typeAt, typeAtSolid, withImport, type Entry, type Hover } from "./hover";
 
 const GUIDE = "https://github.com/solidjs/reactivescript/blob/main/guide/diagnostics.md";
@@ -222,12 +222,16 @@ export default function Counter() {
 `;
 
 /** Solid 2.0 on the left, the same program as .rx on the right (torx.ts), checked by the compiler. */
-function FromSolid(props: { source: string; onChange: (value: string) => void; files: Record<string, string>; ready: boolean; hidden: boolean; onUse: (rx: string, files: Record<string, string>) => void }) {
+function FromSolid(props: { source: string; onChange: (value: string) => void; files: Record<string, string>; ready: boolean; hidden: boolean; onRx: (r: { of: string; code: string; files: Record<string, string> }) => void }) {
   const [out, setOut] = createSignal<{ of: string; code: string; problems: RxProblem[]; files: Record<string, string> }>({ of: "", code: "", problems: [], files: {} });
   createEffect(
     () => props.source,
     (source) => {
-      solidToRx(source).then((r) => props.source === source && setOut({ of: source, ...r }));
+      solidToRx(source).then((r) => {
+        if (props.source !== source) return;
+        setOut({ of: source, ...r });
+        props.onRx({ of: source, code: r.problems.length ? "" : r.code, files: r.files });
+      });
     },
   );
   const current = () => out().of === props.source;
@@ -292,10 +296,6 @@ function FromSolid(props: { source: string; onChange: (value: string) => void; f
         <div class="out-head">
           <span class="label">ReactiveScript</span>
           <span class="hint">the same program as .rx; a prototype that lists what it cannot read</span>
-          <span class="spacer" />
-          <button type="button" class="btn" data-testid="use-rx" disabled={!rx() || problems().length > 0} onClick={() => props.onUse(rx(), out().files)}>
-            Edit as .rx
-          </button>
         </div>
         <Show when={problems().length}>
           <p class="stale-note">Some of this has no .rx form yet, so the result is incomplete.</p>
@@ -363,14 +363,13 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function Playground(props: { initial: { files: Record<string, string>; active: string; preset?: string }; compiler: Promise<void> }) {
+function Playground(props: { initial: { files: Record<string, string>; active: string; preset?: string; solid?: string }; compiler: Promise<void> }) {
   const [files, setFiles] = createSignal<Record<string, string>>(props.initial.files);
   const [active, setActive] = createSignal(props.initial.active);
   const [preset, setPreset] = createSignal(props.initial.preset ?? "");
   const [copied, setCopied] = createSignal("");
-  const [explain, setExplain] = createSignal(true);
-  const [mode, setMode] = createSignal<"rx" | "solid">("rx");
-  const [solidSource, setSolidSource] = createSignal("");
+  const [mode, setMode] = createSignal<"rx" | "solid">(props.initial.solid === undefined ? "rx" : "solid");
+  const [solidSource, setSolidSource] = createSignal(props.initial.solid ?? "");
 
   // "loading", "ready", or why the compiler did not load
   const [compiler, setCompiler] = createSignal("loading");
@@ -390,7 +389,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
       .map(([p, m]) => ({ path: p, jsx: m.jsx ?? "" })),
   );
   const rawJsx = createMemo(() => modules().map((m) => m.jsx).join("\n\n"));
-  const [solid, setSolid] = createSignal<{ raw: string; code: string; error?: string; parts?: { path: string; code: string }[] }>({ raw: "", code: "" });
+  const [solid, setSolid] = createSignal<{ raw: string; code: string; error?: string }>({ raw: "", code: "" });
   createEffect(
     () => [rawJsx(), modules()] as const,
     ([raw, mods]) => {
@@ -398,28 +397,22 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
         .then(
           (rs) =>
             rawJsx() === raw &&
-            setSolid({ raw, code: rs.map((r) => (r.path === ENTRY ? r.code : `// ${r.path}\n${r.code}`)).join("\n"), error: rs.find((r) => r.error)?.error, parts: rs.map((r) => ({ path: r.path, code: r.code })) }),
+            setSolid({ raw, code: rs.map((r) => (r.path === ENTRY ? r.code : `// ${r.path}\n${r.code}`)).join("\n"), error: rs.find((r) => r.error)?.error }),
         )
         .catch((e) => rawJsx() === raw && setSolid({ raw, code: raw, error: String(e?.message ?? e) }));
     },
   );
   const shown = () => (solid().raw === rawJsx() ? solid().code : "");
-  // the same program, where it can run: playground.solidjs.com takes its tabs from the URL
-  const elsewhere = createMemo(() => {
-    const s = solid();
-    if (s.raw !== rawJsx() || !s.parts || s.error || stale()) return { why: "nothing to open until the program compiles" };
-    const t = solidTabs(s.parts, files(), lastGood()?.app.css ?? "");
-    return t.tabs ? { url: solidPlaygroundUrl(t.tabs) } : { why: t.why ?? "" };
-  });
+  // each view line's .rx line, where it can be told: a click there selects it in the editor
+  const links = createMemo(() => linkLines(shown(), files()));
+  const [picked, setPicked] = createSignal(-1);
   const codeHtml = createMemo(() =>
     shown()
       .split("\n")
-      .map((l) => {
-        const n = explain() ? noteFor(l) : undefined;
-        const note = n
-          ? `<div class="note" data-testid="note">${/^\s*/.exec(l)![0]}<span><b>${esc(n.helper)}</b> → ${esc(n.text)}${esc(n.reads.length ? ` · reads ${n.reads.join(", ")}` : "")}</span></div>`
-          : "";
-        return `<div class="cl">${highlight(l, "javascript") || " "}${note}</div>`;
+      .map((l, i) => {
+        const at = links()[i];
+        const cls = `cl${at ? " link" : ""}${picked() === i ? " on" : ""}`;
+        return `<div class="${cls}"${at ? ` data-l="${i}" title="${esc(at.file)}:${at.line}"` : ""}>${highlight(l, "javascript") || " "}</div>`;
       })
       .join(""),
   );
@@ -427,8 +420,17 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
 
   const text = () => files()[active()] ?? "";
   const editLines = createMemo(() => {
-    const bad = new Set(diagnostics().filter((d) => d.file === "/" + active() && d.line).map((d) => d.line!));
-    return highlightRx(text())
+    const mine = diagnostics().filter((d) => d.file === "/" + active() && d.line);
+    const bad = new Set(mine.map((d) => d.line!));
+    const t = text();
+    // a problem's own span, or the word at its start when the span is empty
+    const marks = mine.flatMap((d): [number, number][] => {
+      if (!d.range) return [];
+      const s = lineCol(t, d.range.start.line, d.range.start.column);
+      const e = lineCol(t, d.range.end.line, d.range.end.column);
+      return [[s, e > s ? e : s + Math.max(1, /^[\w$]*/.exec(t.slice(s))![0].length)]];
+    });
+    return highlightRx(t, marks)
       .split("\n")
       .map((l, i) => `<span class="eline${bad.has(i + 1) ? " bad" : ""}">${l || " "}</span>`)
       .join("\n");
@@ -448,18 +450,19 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     setPreset(id);
     setMode("rx");
   };
+  // the .rx read from the Solid side, kept for turning the page back; none when the reading left something out
+  let converted: { of: string; code: string; files: Record<string, string> } | undefined;
   const toggleMode = () => {
-    // the other way starts from this program's Solid view, the entry module's
+    // each way round, the editor gets the program the other side showed: the Solid view, or the .rx read from it
     if (mode() === "rx") setSolidSource(shown().split(/\n\/\/ \/[^\n]*\n/)[0] || SAMPLE_SOLID);
+    else if (converted && converted.of === solidSource() && converted.code.trim()) {
+      const next: Record<string, string> = { ...files(), ...converted.files, "main.rx": converted.code };
+      if (!(HELPERS in converted.files)) delete next[HELPERS];
+      setFiles(next);
+      setActive("main.rx");
+      setPreset("");
+    }
     setMode(mode() === "rx" ? "solid" : "rx");
-  };
-  const useRx = (rx: string, extra: Record<string, string>) => {
-    const next: Record<string, string> = { ...files(), ...extra, "main.rx": rx };
-    if (!(HELPERS in extra)) delete next[HELPERS];
-    setFiles(next);
-    setActive("main.rx");
-    setPreset("");
-    setMode("rx");
   };
   const goTo = (d: Diagnostic) => {
     const name = d.file.replace(/^\//, "");
@@ -470,6 +473,22 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
       const end = d.range ? lineCol(t, d.range.end.line, d.range.end.column) : start;
       textarea.focus();
       textarea.setSelectionRange(start, Math.max(end, start));
+    });
+  };
+  const pickLine = (e: MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>(".cl[data-l]");
+    const at = el ? links()[Number(el.dataset.l)] : undefined;
+    if (!el || !at) return;
+    setPicked(Number(el.dataset.l));
+    if (at.file in files()) setActive(at.file);
+    queueMicrotask(() => {
+      const t = files()[active()] ?? "";
+      const start = lineCol(t, at.line, 0);
+      const end = t.indexOf("\n", start);
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(start, end < 0 ? t.length : end);
+      const lh = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+      textarea.scrollTop = Math.max(0, (at.line - 1) * lh - textarea.clientHeight / 3);
     });
   };
   const addFile = () => {
@@ -488,7 +507,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
     setActive("main.rx");
   };
   const share = async () => {
-    const hash = await encode({ files: files(), active: active() });
+    const hash = await encode({ files: files(), active: active(), solid: mode() === "solid" ? solidSource() : undefined });
     history.replaceState(null, "", "#" + hash);
     setCopied((await copyText(location.href)) ? "Link copied" : "Copy the address bar");
     setTimeout(() => setCopied(""), 2000);
@@ -497,11 +516,12 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
   // the URL keeps the program, so a reload or a shared link opens it again
   let hashTimer: ReturnType<typeof setTimeout> | undefined;
   createEffect(
-    () => [files(), active(), preset()] as const,
-    ([f, a, p]) => {
+    () => [files(), active(), preset(), mode() === "solid" ? solidSource() : undefined] as const,
+    ([f, a, p, s]) => {
       clearTimeout(hashTimer);
       hashTimer = setTimeout(async () => {
-        const hash = p ? `example=${p}` : await encode({ files: f, active: a });
+        // the Solid → .rx side is kept too, so a reload opens the page the same way round
+        const hash = p && s === undefined ? `example=${p}` : await encode({ files: f, active: a, solid: s });
         history.replaceState(null, "", "#" + hash);
       }, 300);
     },
@@ -541,7 +561,7 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
         <Show when={presets.find((p) => p.id === preset())}>{(p) => <p class="blurb">{p().blurb}</p>}</Show>
       </Show>
 
-      <FromSolid source={solidSource()} onChange={setSolidSource} files={files()} ready={ready()} hidden={mode() !== "solid"} onUse={useRx} />
+      <FromSolid source={solidSource()} onChange={setSolidSource} files={files()} ready={ready()} hidden={mode() !== "solid"} onRx={(r) => (converted = r)} />
       <main class="grid" hidden={mode() !== "rx"}>
         <section class="pane editor-pane">
           <div class="tabs">
@@ -594,22 +614,6 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
           <div class="out-head">
             <span class="label">Solid primitives</span>
             <span class="hint">what the compiler's __rt calls are in Solid 2.0, for reading</span>
-            <span class="spacer" />
-            <Show
-              when={elsewhere().url}
-              fallback={
-                <span class="btn off" data-testid="open-solid" title={elsewhere().why}>
-                  Open in Solid Playground
-                </span>
-              }
-            >
-              <a class="btn" data-testid="open-solid" href={elsewhere().url} target="_blank" rel="noopener" title="Run this Solid view at playground.solidjs.com">
-                Open in Solid Playground
-              </a>
-            </Show>
-            <label class="check">
-              <input type="checkbox" checked={explain()} onChange={(e) => setExplain(e.currentTarget.checked)} data-testid="explain-toggle" /> Explain
-            </label>
           </div>
           <Show when={stale() && lastGood()}>
             <p class="stale-note">Not compiled: showing the last output that compiled.</p>
@@ -631,8 +635,8 @@ function Playground(props: { initial: { files: Record<string, string>; active: s
                 </Show>
               </div>
             </Show>
-            <pre class="code" data-testid="solid" innerHTML={codeHtml()} />
-            <Show when={explain() && prims().length}>
+            <pre class="code" data-testid="solid" innerHTML={codeHtml()} onClick={pickLine} />
+            <Show when={prims().length}>
               <div class="explain">
                 <div class="label">What each primitive stands for in .rx</div>
                 <table class="map" data-testid="explain">
@@ -669,7 +673,7 @@ async function start() {
   const fromHash = await decode(location.hash);
   const featured = presets.find((p) => p.id === (fromHash?.preset ?? "await")) ?? presets[0];
   const initial = fromHash?.files
-    ? { files: fromHash.files, active: fromHash.active in fromHash.files ? fromHash.active : "main.rx" }
+    ? { files: fromHash.files, active: fromHash.active in fromHash.files ? fromHash.active : "main.rx", solid: fromHash.solid }
     : { files: { ...featured.files }, active: "main.rx", preset: featured.id };
   const root = document.getElementById("app")!;
   root.textContent = "";

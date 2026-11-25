@@ -152,10 +152,140 @@ const unseed = (seed: string) => {
   return /^(\([^)]*\)\s*=>|\w+\s*=>|function|async)/.test(value) ? seed : value;
 };
 
+/** The index of the `;` (or closing `}`) that ends the statement running from `from`. */
+function statementEnd(code: string, from: number): number {
+  for (let i = from; i < code.length; i++) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < code.length && code[i] !== c; i++) if (code[i] === "\\") i++;
+    } else if ("([{".includes(c)) i = close(code, i) - 1;
+    else if (c === ";" || c === "}") return i;
+  }
+  return code.length;
+}
+/** The `{` of the innermost block around `at`. */
+function enclosing(code: string, at: number): number {
+  for (let o = at - 1; o >= 0; o--) if (code[o] === "{" && close(code, o) > at) return o;
+  return -1;
+}
+/** The last `return` directly in the block whose `{` is at `open`. */
+function lastReturn(code: string, open: number): number {
+  const end = close(code, open) - 1;
+  let found = -1;
+  for (let i = open + 1; i < end; i++) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < end && code[i] !== c; i++) if (code[i] === "\\") i++;
+    } else if ("([{".includes(c)) i = close(code, i) - 1;
+    else if (/^return\b/.test(code.slice(i, i + 7)) && !/[\w$.]/.test(code[i - 1])) found = i;
+  }
+  return found;
+}
+
+/** `context c = d`, `use c` and `provide c = e` (07): Solid's createContext, useContext and the context as provider. */
+function contexts(code: string, used: Set<string>): string {
+  const names = new Set<string>();
+  for (const m of code.matchAll(/__rt\.(?:context\("([\w$]+)"|useGet\(([\w$]+),|provide\(([\w$]+),)/g)) names.add((m[1] ?? m[2] ?? m[3]).replace(/^v\$/, ""));
+  if (!names.size) return code;
+  code = eachCall(code, "__rt.context", (a) => (used.add("createContext"), `createContext(${a[1] === "null" ? "" : a[1]})`));
+  code = eachCall(code, "__rt.useGet", (a) => (used.add("useContext"), `useContext(${a[0]})()`));
+  for (let i = code.indexOf("__rt.provide("); i >= 0; i = code.indexOf("__rt.provide(", i + 1)) {
+    const { list, end } = args(code, i + "__rt.provide".length);
+    // the entry's `w` is the source's writer, for the runtime's registry; a reader takes only the value
+    const fields = (list[1] ?? "").startsWith("{") ? args(list[1], 0).list : [];
+    const g = fields.map((f) => /^get:\s*([\s\S]*)$/.exec(f)).find(Boolean);
+    const v = fields.map((f) => /^value:\s*([\s\S]*)$/.exec(f)).find(Boolean);
+    // `{ get: memo }`: the memo's function is the accessor the context carries
+    const memo = g && /^(__rt\.memo|createMemo)\(/.exec(g[1]);
+    const inner = memo && close(g[1], memo[1].length) === g[1].length ? args(g[1], memo[1].length).list : undefined;
+    const value = inner ? (memo![1] === "createMemo" ? inner[0] : unprev(inner[1] ?? "")) : g ? g[1] : v ? `() => ${v[1]}` : undefined;
+    const open = enclosing(code, i);
+    const ret = open < 0 ? -1 : lastReturn(code, open);
+    if (value === undefined || ret < 0) continue;
+    const from = code.lastIndexOf("\n", i) + 1;
+    const to = code[end] === ";" ? end + 1 : end;
+    const xEnd = statementEnd(code, ret + "return".length);
+    const x = unparen(code.slice(ret + "return".length, xEnd));
+    const wrapped = `return (\n<${list[0]} value={${value}}>\n${x.startsWith("<") ? x : `{${x}}`}\n</${list[0]}>\n)`;
+    code = ret > i ? code.slice(0, from) + code.slice(to, ret) + wrapped + code.slice(xEnd) : code.slice(0, ret) + wrapped + code.slice(xEnd, from) + code.slice(to);
+    i = from - 1;
+  }
+  // a context is its own provider component, so its name is capitalized
+  for (const n of names) {
+    const e = n.replace(/\$/g, "\\$");
+    code = code.replace(new RegExp(`(__i\\d+\\[)"${e}"\\]`, "g"), `$1"${cap(n)}Context"]`);
+    code = inCode(code, (part) => part.replace(new RegExp(`(?<![\\w$.])(?:v\\$)?${e}\\b(?!=\\{)`, "g"), `${cap(n)}Context`));
+  }
+  return code;
+}
+
+/** `error E(a) => m` (R-f-1) as a class, `throw E(a)` as `throw new E(a)`, and a typed catch or boundary by instanceof. */
+function errorClasses(code: string): string {
+  const names: string[] = [];
+  for (let i = code.indexOf("function g$"); i >= 0; i = code.indexOf("function g$", i + 1)) {
+    const m = /^function g\$([\w$]+)\(__rt\) \{/.exec(code.slice(i));
+    if (!m) continue;
+    const end = close(code, i + m[0].length - 1);
+    const at = code.indexOf("__rt.errorClass(", i);
+    if (at < 0 || at > end) continue;
+    const a = args(code, at + "__rt.errorClass".length).list;
+    const fn = /^\(([^)]*)\)\s*=>\s*([\s\S]*)$/.exec(a[2] ?? "");
+    let fields: string[];
+    try {
+      fields = JSON.parse(a[1] ?? "[]");
+    } catch {
+      continue;
+    }
+    if (!fn) continue;
+    const name = m[1];
+    const ps = fn[1].split(",").map((s) => s.trim()).filter(Boolean);
+    const cls = [`class ${name} extends Error {`, `constructor(${ps.join(", ")}) {`, `super(${unparen(fn[2])});`, `this.name = ${JSON.stringify(name)};`, ...fields.map((f, k) => `this.${f} = ${ps[k] ?? "undefined"};`), "}", "}"].join("\n");
+    const lead = `let c$${name};\n`;
+    const from = code.slice(i - lead.length, i) === lead ? i - lead.length : i;
+    code = code.slice(0, from) + cls + code.slice(end);
+    names.push(name);
+    i = from;
+  }
+  for (const n of names) code = code.replace(new RegExp(`^[ \\t]*const (?:v\\$)?${n} = g\\$${n}\\(__rt\\);\\n`, "m"), "");
+  // an error a JavaScript module declares (a .d.rx `error`) is its class, imported by name
+  for (const m of code.matchAll(/^[ \t]*const (?:v\$)?([\w$]+) = __rt\.jsError\("[\w$]+"\);$/gm)) names.push(m[1]);
+  for (const n of names) code = inCode(code, (part) => part.replace(new RegExp(`(?<![\\w$.])(?<!new )((?:v\\$)?${n.replace(/\$/g, "\\$")})\\(`, "g"), "new $1("));
+
+  // `c ? throw e : x` (07): JavaScript has no throw expression, so a function that returns one is an if, then a return
+  code = code.replace(/^([ \t]*)return ([^\n;]*?) \? __rt\.throw\(([^\n]*)\) : ([^\n;]*);$/gm, (all, ind, c, e, x) => (close(`(${e})`, 0) === e.length + 2 ? `${ind}if (${c}) throw ${e};\n${ind}return ${x};` : all));
+  code = eachCall(code, "__rt.throw", (a) => `(() => {\nthrow ${a[0]};\n})()`);
+  code = eachCall(code, "__rt.isA", (a) => {
+    const cs = /^\[([\w$,\s]+)\]$/.exec(a[1] ?? "");
+    return cs ? `(${cs[1].split(",").map((c) => c.trim()).filter(Boolean).map((c) => `${a[0]} instanceof ${c}`).join(" || ")})` : undefined;
+  });
+  // a typed boundary (R-f-4) is an Errored whose fallback throws other classes on, to the boundary above it
+  for (let i = code.indexOf("<__rt.TypedErrored"); i >= 0; i = code.indexOf("<__rt.TypedErrored", i + 1)) {
+    let k = i + "<__rt.TypedErrored".length;
+    for (; k < code.length && code[k] !== ">"; k++) if (code[k] === "{") k = close(code, k) - 1;
+    const tag = code.slice(i, k);
+    const attr = (n: string) => {
+      const m = new RegExp(`\\s${n}=\\{`).exec(tag);
+      const o = m ? i + m.index + m[0].length - 1 : -1;
+      return o < 0 ? undefined : code.slice(o + 1, close(code, o) - 1).trim();
+    };
+    const cs = /^\[([\w$,\s]+)\]$/.exec(attr("classes") ?? "");
+    const fb = /^\(([\w$]+)\)\s*=>\s*([\s\S]*)$/.exec(attr("fallback") ?? "");
+    if (!cs || !fb) continue;
+    const p = fb[1] === "__err" ? "err" : fb[1];
+    const test = cs[1].split(",").map((c) => `${p}() instanceof ${c.trim()}`).join(" || ");
+    code = code.slice(0, i) + `<Errored fallback={(${p}) => {\nif (!(${test})) throw ${p}();\nreturn ${fb[2].replace(/\b__err\b/g, p)};\n}}` + code.slice(k);
+  }
+  return code.replace(/<\/__rt\.TypedErrored>/g, "</Errored>");
+}
+
 export function solidify(code: string): string {
   const used = new Set<string>();
   const optimistic = new Set<string>();
   const stores = new Set<string>();
+  // a source's setter is setX, unless the module already has that name (an action `setX`, say): then setXValue
+  const taken = new Set([...code.matchAll(/\b(?:const|let|function|class) (?:[vw]\$)?([\w$]+)/g)].map((m) => m[1]));
+  for (const m of code.matchAll(/^import \{([^}]*)\}/gm)) for (const x of m[1].split(",")) taken.add(x.trim().split(/\s+as\s+/).pop()!.replace(/^[vw]\$/, ""));
+  const setter = (n: string) => (taken.has(`set${cap(n)}`) ? `set${cap(n)}Value` : `set${cap(n)}`);
 
   // import aliases: `import { f as w$f }` and `const v$f = w$f;` are one name
   code = code.replace(/(\w+) as w\$\1\b/g, "$1").replace(/^\s*const v\$(\w+) = w\$\1;\n/gm, "");
@@ -181,6 +311,8 @@ export function solidify(code: string): string {
   }
   // the name a server fn is called by is the function itself
   code = code.replace(/^[ \t]*const v\$(\w+) = __rt\.serverRef\("\1", sf\$\1\);\n/gm, "").replace(/\bsf\$(\w+)\b/g, "$1");
+  code = contexts(code, used);
+  code = errorClasses(code);
   code = code.replace(/^[ \t]*__rt\.reg\([^;]*\);\n/gm, "").replace(/^[ \t]*__rt\.hoisted\([^;]*\);\n/gm, "");
   if ((code.match(/\b__o\b/g) ?? []).length === (code.match(/const __o = __rt\.owner\(\);/g) ?? []).length)
     code = code.replace(/^[ \t]*const __o = __rt\.owner\(\);\n/gm, "");
@@ -220,7 +352,7 @@ export function solidify(code: string): string {
     const semi = code[end] === ";" ? end + 1 : end;
     const ind = /[ \t]*$/.exec(code.slice(0, i))![0];
     const call = code.slice(i + decl.length - "createSignal(".length, end);
-    code = code.slice(0, i) + `const [${name}$truth, set${cap(name)}] = ${call};\n${ind}const [${name}, setOptimistic${cap(name)}] = createOptimistic(() => ${name}$truth());` + code.slice(semi);
+    code = code.slice(0, i) + `const [${name}$truth, ${setter(name)}] = ${call};\n${ind}const [${name}, setOptimistic${cap(name)}] = createOptimistic(() => ${name}$truth());` + code.slice(semi);
   }
 
   // `x key k = e` (ST-4): the answer as a memo, and a projection over it that keeps each row by its key
@@ -353,8 +485,8 @@ export function solidify(code: string): string {
   }
   code = inCode(code, (part) =>
     part
-      .replace(/\bw\$(\w+)\.set\(/g, (_, n) => `set${cap(n)}(`)
-      .replace(/\bw\$(\w+)\b/g, (_, n) => `set${cap(n)}`)
+      .replace(/\bw\$(\w+)\.set\(/g, (_, n) => `${setter(n)}(`)
+      .replace(/\bw\$(\w+)\b/g, (_, n) => setter(n))
       .replace(/\ba\$(\w+)\$(\d+)\b/g, (_, n, k) => (k === "0" ? `${n}$await` : `${n}$await${k}`))
       .replace(/\bp\$(\w+)\b/g, (_, n) => `prev${cap(n)}`)
       .replace(/\b[vV]\$(\w+)\b/g, "$1"),
@@ -390,7 +522,7 @@ export function solidify(code: string): string {
   }
   // a module named ./api is the app's server: `const x = __rt.api("x")` is a name imported from it
   const api: string[] = [];
-  code = code.replace(/^[ \t]*const ([\w$]+) = __rt\.api\("([\w$]+)"\);\n/gm, (_, local, name) => (api.push(local === name ? name : `${name} as ${local}`), ""));
+  code = code.replace(/^[ \t]*const ([\w$]+) = __rt\.(?:api|jsError)\("([\w$]+)"\);\n/gm, (_, local, name) => (api.push(local === name ? name : `${name} as ${local}`), ""));
   if (api.length) code = `import { ${api.join(", ")} } from "./api";\n` + code;
   // `log` is the one builtin JavaScript has a name for: the console's. A module that imported the name gets the same
   const logs = new Set<string>();
@@ -407,15 +539,28 @@ export function solidify(code: string): string {
     let body = mod[1].replace(/^\t/gm, "");
     for (const [, key, value] of mod[2].matchAll(/([\w$]+):\s*([\w$]+)/g)) {
       if (key !== value) continue;
-      body = body.replace(new RegExp(`^(function|const|let) (\\[?${key}\\b)`, "m"), "export $1 $2");
+      // `x`, not the `x$await` declared above it
+      body = body.replace(new RegExp(`^(function|const|let) (\\[?${key.replace(/\$/g, "\\$")}(?![\\w$]))`, "m"), "export $1 $2");
     }
-    code = code.slice(0, mod.index) + body;
+    // an error class sits above the module's setup
+    let above = code.slice(0, mod.index);
+    for (const [, key, value] of mod[2].matchAll(/([\w$]+):\s*([\w$]+)/g)) if (key === value) above = above.replace(new RegExp(`^class ${key}\\b`, "m"), `export class ${key}`);
+    code = above + body;
   }
 
   // the app wrapper, when nothing in it needs the runtime any more
-  const wrap = /export default function main\(__rt\) \{\s*const __B = __rt\.B;\s*return \(\) => \{([\s\S]*)return \(?\s*(?:<>\s*)?<(\w+) children=\{\[\]\} \/>\s*(?:<\/>\s*)?\)?;\s*\};\s*\}\s*$/.exec(code);
-  if (wrap && !/__rt|__B/.test(wrap[1])) code = code.slice(0, wrap.index) + wrap[1].replace(/^\t\t/gm, "") + `export default ${wrap[2]};\n`;
+  const wrap = /export default function main\(__rt\) \{\s*const __B = __rt\.B;\s*return \(\) => \{([\s\S]*)\breturn ([\s\S]*?);\s*\};\s*\}\s*$/.exec(code);
+  if (wrap && !/__rt|__B/.test(wrap[1] + wrap[2])) {
+    const one = /^\(?\s*(?:<>\s*)?<(\w+) children=\{\[\]\} \/>\s*(?:<\/>\s*)?\)?$/.exec(wrap[2].trim());
+    // a module-level provide wraps the app: the root is a component of its own
+    code = code.slice(0, wrap.index) + wrap[1].replace(/^\t\t/gm, "") + (one ? `export default ${one[1]};\n` : `export default function Root() {\nreturn ${wrap[2].trim()};\n}\n`);
+  }
 
+  // a component used with no children is passed none, not an empty list
+  code = inCode(code, (part) => part.replace(/\s+children=\{\[\]\}(?=\s*\/?>)/g, ""));
+  // a provided value is an accessor, so `use c` alone is what useContext returns
+  code = code.replace(/createMemo\(\(\) => (useContext\([\w$]+\))\(\)\)/g, "$1");
+  for (const n of used) if (!new RegExp(`\\b${n}\\(`).test(code)) used.delete(n);
   for (const c of ["Errored", "Loading", "For", "Show", "Repeat"]) if (new RegExp(`<${c}[\\s>]`).test(code)) used.add(c);
   const head = used.size ? `import { ${[...used].sort().join(", ")} } from "solid-js";\n` : "";
   return head + code;

@@ -14,7 +14,6 @@
   "dependencies": {
     "@solidjs/web": "2.0.3",
     "highlight.js": "^11.11.1",
-    "@amoutonbrady/lz-string": "0.2.0",
     "prettier": "^3.10.1",
     "solid-js": "2.0.3"
   },

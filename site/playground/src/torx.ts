@@ -15,6 +15,8 @@ type Binding =
   | { kind: "equation" } // a module's own declaration: read as itself, and a reactive read
   | { kind: "server" } // a "use server" function: a call from reactive scope is an await (12 SF-2)
   | { kind: "input"; as: string } // an effect's parameter: its input, by position ($0, $1)
+  | { kind: "error" } // `class E extends Error`: an error declaration (R-f-1); `new E(a)` is `E(a)`
+  | { kind: "context"; as: string } // `createContext(…)`: a context (07), named as .rx names it
   | { kind: "plain" };
 
 const SOLID = new Set(["solid-js", "@solidjs/web", "solid-js/store"]);
@@ -91,6 +93,58 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   const params = (f: Node) => f.params.map(text).join(", ");
   /** An arrow's parameters: .rx writes them without types. */
   const bare = (f: Node) => f.params.map((q: Node) => (q.typeAnnotation ? src.slice(q.start, q.typeAnnotation.start).replace(/\?$/, "") : text(q))).join(", ");
+  /** `ThemeContext` is the context .rx calls `theme`. */
+  const contextName = (js: string) => js.replace(/Context$/, "").replace(/^./, (c) => c.toLowerCase()) || js;
+  const renamed = new Map<string, string>(); // an imported context: its .rx name
+  /** The .rx name of the context `n` names, or undefined if it is not one. */
+  const contextOf = (n: Node | undefined): string | undefined => {
+    if (n?.type !== "Identifier") return;
+    const b = lookup(n.name);
+    if (b?.kind === "context") return b.as;
+    if (b?.kind === "import") return renamed.set(n.name, contextName(n.name)), contextName(n.name);
+  };
+  /** `if (!(e instanceof A || e instanceof B)) throw e;` (or with `e()`): the classes a typed catch takes. */
+  const rethrows = (st: Node | undefined, p: string, called: boolean): string[] | undefined => {
+    if (st?.type !== "IfStatement" || st.alternate) return;
+    const then = st.consequent.type === "BlockStatement" && st.consequent.body.length === 1 ? st.consequent.body[0] : st.consequent;
+    const isP = (x: Node) => (called ? x.type === "CallExpression" && !x.arguments.length && x.callee.type === "Identifier" && x.callee.name === p : x.type === "Identifier" && x.name === p);
+    const t = unwrap(st.test);
+    if (then?.type !== "ThrowStatement" || !isP(unwrap(then.argument)) || t.type !== "UnaryExpression" || t.operator !== "!") return;
+    const out: string[] = [];
+    const walk = (x: Node): boolean => {
+      x = unwrap(x);
+      if (x.type === "LogicalExpression" && x.operator === "||") return walk(x.left) && walk(x.right);
+      if (x.type === "BinaryExpression" && x.operator === "instanceof" && isP(unwrap(x.left)) && x.right.type === "Identifier") return out.push(x.right.name), true;
+      return false;
+    };
+    return walk(t.argument) ? out : undefined;
+  };
+  /** `class E extends Error { constructor(a) { super(m); this.name = "E"; this.a = a; } }` as `error E(a) => m`. */
+  function errorDecl(c: Node): string[] {
+    const name = c.id.name as string;
+    const members: Node[] = c.body.body;
+    const ctor = members.find((m) => m.kind === "constructor");
+    if (members.length !== (ctor ? 1 : 0)) return fail(c, `${name}: an error class with members besides its constructor has no .rx form`), [];
+    if (!ctor) return [`error ${name}`];
+    const ps: string[] = ctor.params.map((q: Node) => (q.type === "Identifier" ? q.name : ""));
+    if (ps.some((q) => !q)) return fail(ctor, `${name}: an error's fields are named parameters`), [];
+    let message: Node | undefined;
+    for (const st of ctor.body.body as Node[]) {
+      const e = st.type === "ExpressionStatement" ? unwrap(st.expression) : undefined;
+      if (e?.type === "CallExpression" && e.callee.type === "Super" && e.arguments.length <= 1) message = e.arguments[0];
+      else if (e?.type === "AssignmentExpression" && e.left.type === "MemberExpression" && e.left.object.type === "ThisExpression" && !e.left.computed) {
+        const f = e.left.property.name as string;
+        if (f === "name" && e.right.type === "StringLiteral" && e.right.value === name) continue;
+        if (f !== "name" && e.right.type === "Identifier" && e.right.name === f && ps.includes(f)) continue;
+        return fail(st, `${name}: a field that is not its parameter has no .rx form`), [];
+      } else return fail(st, `${name}: an error's constructor only calls super and names its fields`), [];
+    }
+    scopes.push(new Map(ps.map((q) => [q, { kind: "plain" } as Binding])));
+    const m = message ? ` => ${expr(message)}` : "";
+    scopes.pop();
+    const typed = ctor.params.map((q: Node) => text(q)).join(", ");
+    return [`error ${name}${ps.length || message ? `(${typed})` : ""}${m}`];
+  }
 
   // ---- text placement: an expression's text keeps the source's indentation until it is placed
 
@@ -237,6 +291,20 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       return n.prefix ? `(${x} ${n.operator[0]} 1)` : x;
     }
     if (n.type === "AssignmentExpression" || n.type === "UpdateExpression") return fail(n, `${text(n)}: .rx writes are statements on a source, x := e`);
+    // `new E(a)` of an error class is the declaration's own call (R-f-1)
+    if (n.type === "NewExpression" && n.callee.type === "Identifier" && (lookup(n.callee.name)?.kind === "error" || (lookup(n.callee.name)?.kind === "import" && /^[A-Z]/.test(n.callee.name))))
+      return `${n.callee.name}(${n.arguments.map((x: Node) => expr(x)).join(", ")})`;
+    // `(() => { throw e; })()`: .rx's throw expression (07)
+    if (n.type === "CallExpression" && !n.arguments.length && unwrap(n.callee).type === "ArrowFunctionExpression") {
+      const f = unwrap(n.callee);
+      const only = f.body.type === "BlockStatement" && f.body.body.length === 1 ? f.body.body[0] : undefined;
+      if (!f.params.length && only?.type === "ThrowStatement") return tight ? `(throw ${expr(only.argument)})` : `throw ${expr(only.argument)}`;
+    }
+    // `useContext(c)()`: the context's value, read where it is (07)
+    if (n.type === "CallExpression" && !n.arguments.length && callee(n.callee) === "useContext" && lookup("useContext")?.kind === "plain") {
+      const c = contextOf(n.callee.arguments[0]);
+      if (c) return tight ? `(use ${c})` : `use ${c}`;
+    }
     if (n.type === "ThisExpression" || n.type === "NewExpression" || n.type === "ClassExpression") return fail(n, `${n.type.replace("Expression", "").toLowerCase()} has no .rx form`);
     return;
   }
@@ -511,7 +579,11 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       }
       case "TryStatement": {
         const out = ["try {", ...indented(body(s.block), INDENT)];
-        if (s.handler) out.push(`} catch${s.handler.param ? ` (${text(s.handler.param)})` : ""} {`, ...indented(body(s.handler.body), INDENT));
+        const p = s.handler?.param?.type === "Identifier" ? (s.handler.param.name as string) : undefined;
+        // `if (!(e instanceof A)) throw e;` first: a typed catch, which rethrows the other classes (R-f-6)
+        const classes = p ? rethrows(s.handler.body.body[0], p, false) : undefined;
+        const handler = classes ? { ...s.handler.body, body: s.handler.body.body.slice(1) } : s.handler?.body;
+        if (s.handler) out.push(`} catch${s.handler.param ? ` (${classes ? `${p}: ${classes.join(" | ")}` : text(s.handler.param)})` : ""} {`, ...indented(body(handler), INDENT));
         if (s.finalizer) out.push("} finally {", ...indented(body(s.finalizer), INDENT));
         return [...out, "}"];
       }
@@ -661,6 +733,15 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       const u = unwrap(f);
       if (isFn(u)) {
         const p = u.params[0];
+        const st: Node[] = u.body.type === "BlockStatement" ? u.body.body : [];
+        // `{ if (!(e() instanceof A)) throw e(); return <… /> }`: a typed boundary, which passes the rest up (R-f-4)
+        const classes = tag === "Errored" && p?.type === "Identifier" && st.length === 2 && st[1].type === "ReturnStatement" ? rethrows(st[0], p.name, true) : undefined;
+        if (classes && st[1].argument) {
+          scopes.push(new Map([[p.name, { kind: "read" } as Binding]]));
+          const lines = markup([unwrap(st[1].argument)]);
+          scopes.pop();
+          return { head: `(${p.name}: ${classes.join(" | ")})`, lines };
+        }
         const b = returned(u);
         if (!b && u.body.type === "BlockStatement" && !(p && uses([u.body], p.name))) return { head: "", lines: region(u) };
         if (!b) return fail(u, `a <${tag}> fallback with statements`), { head: "", lines: [] };
@@ -710,6 +791,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
         : [`{${word} fallback${f.head} {`, ...indented(f.lines, INDENT), "} {", ...indented(kids(), INDENT), "}}"];
     }
     if (known) return fail(el, `<${tag}>: no .rx form in this prototype`), [];
+    if (lookup(tag)?.kind === "context") return fail(el, `<${tag} value>: a provider inside the view; .rx's provide covers a whole component, at the top of its view`), [];
     const attrs = el.openingElement.attributes.map(attr).filter((a: string | undefined): a is string => a !== undefined);
     const flat = attrs.join(" ");
     const inner = el.openingElement.selfClosing ? [] : kids();
@@ -771,6 +853,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   function declare(stmts: Node[], setup = false) {
     const later: Node[] = [];
     for (const s of stmts) {
+      if (s.type === "ClassDeclaration" && s.id && s.superClass?.type === "Identifier" && s.superClass.name === "Error") bind(s.id.name, { kind: "error" });
       if (s.type === "FunctionDeclaration" && s.id) bind(s.id.name, isServer(s) ? { kind: "server" } : setup && !returned(s) ? { kind: "handler", fn: s } : { kind: "plain" });
       if (s.type !== "VariableDeclaration") continue;
       for (const d of s.declarations) {
@@ -791,7 +874,8 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
           }
         } else if (d.id.type === "Identifier") {
           if (isServer(d.init) || (/CallExpression$/.test(d.init?.type ?? "") && d.init.arguments.some(isServer))) bind(d.id.name, { kind: "server" });
-          else if (name === "createMemo" || name === "createDeferred") bind(d.id.name, { kind: "read" });
+          else if (name === "createMemo" || name === "createDeferred" || name === "useContext") bind(d.id.name, { kind: "read" });
+          else if (name === "createContext") bind(d.id.name, { kind: "context", as: contextName(d.id.name) });
           else if (d.init?.type === "ArrowFunctionExpression" && d.init.body.type === "BlockStatement" && !returned(d.init) && (setup || !d.init.async)) bind(d.id.name, { kind: "handler", fn: d.init });
           else if (setup && d.init?.type === "ArrowFunctionExpression") (bind(d.id.name, { kind: "plain" }), later.push(d));
           else if (s.kind === "let" && (setup || d.init) && !isFn(d.init) && !/^create[A-Z]/.test(name ?? "")) bind(d.id.name, { kind: "mutable" });
@@ -879,6 +963,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   }
 
   function decl(s: Node, all: Node[]): string[] {
+    if (s.type === "ClassDeclaration" && lookup(s.id?.name)?.kind === "error") return errorDecl(s);
     if (s.type === "FunctionDeclaration" && isServer(s)) return serverDecl(s.id.name, s);
     if (s.type === "FunctionDeclaration") {
       const h = lookup(s.id.name);
@@ -931,6 +1016,15 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       if (d.id.type === "Identifier" && !init && lookup(d.id.name)?.kind === "mutable") return [`source ${d.id.name}${d.id.typeAnnotation ? text(d.id.typeAnnotation) : ""} := undefined`];
       if (d.id.type !== "Identifier" || !init) return fail(d, `${text(d).split("\n")[0]}: no .rx form in this prototype`), [];
       const id = d.id.name as string;
+      if (name === "createContext") {
+        // the default is an accessor, as the provided value is
+        const dv = a[0] && isFn(a[0]) && !a[0].params.length ? returned(a[0]) : a[0];
+        return `context ${contextName(id)}${typeArg(init)} ${dv ? `= ${expr(dv)}` : ""}`.trimEnd().split("\n");
+      }
+      if (name === "useContext") {
+        const c = contextOf(a[0]);
+        return c ? [`${id} = use ${c}`] : (fail(d, `${id}: useContext of something that is not a context`), []);
+      }
       if (name === "createDeferred") {
         const e = returned(a[0]);
         return e ? `deferred ${id} = ${expr(e)}`.split("\n") : (fail(d, `${id}: a deferred value with statements; .rx equations are one expression`), []);
@@ -1017,6 +1111,10 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     const arm = (n: Node) => (/^(Conditional|Sequence|Assignment|ArrowFunction)Expression$/.test(unwrap(n).type) ? `(${expr(n)})` : expr(n));
     for (const x of steps.slice(0, -1)) {
       const then = x.type === "IfStatement" && !x.alternate ? (x.consequent.type === "BlockStatement" && x.consequent.body.length === 1 ? x.consequent.body[0] : x.consequent) : undefined;
+      if (then?.type === "ThrowStatement") {
+        arms.push(`${arm(x.test)} ? throw ${expr(then.argument)}`);
+        continue;
+      }
       if (then?.type !== "ReturnStatement" || !then.argument) return;
       arms.push(`${arm(x.test)} ? ${arm(then.argument)}`);
     }
@@ -1049,6 +1147,18 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     return !!e && (isJsx(unwrap(e)) || unwrap(e).type === "NullLiteral");
   };
 
+  /** A context's provider element: its .rx name, the value given, and what it wraps. */
+  function provider(el: Node | undefined): { name: string; value: string; kids: Node[] } | undefined {
+    if (el?.type !== "JSXElement" || el.openingElement.name.type !== "JSXIdentifier") return;
+    const c = contextOf({ ...el.openingElement.name, type: "Identifier" });
+    const attrs = el.openingElement.attributes;
+    const v = valueOf(attrOf(el, "value"));
+    if (!c || attrs.length !== 1 || !v) return;
+    const f = unwrap(v);
+    const value = isFn(f) && !f.params.length && returned(f) ? expr(returned(f)!) : f.type === "Identifier" && lookup(f.name)?.kind === "read" ? (reactive++, f.name) : expr(f);
+    const kids = el.children.filter((k: Node) => !(k.type === "JSXText" && !k.value.trim()));
+    return { name: c, value, kids };
+  }
   function component(name: string, f: Node, prefix: string): string[] {
     scopes.push(new Map());
     const stmts: Node[] = f.body.type === "BlockStatement" ? f.body.body : [{ ...f.body, type: "ReturnStatement", argument: f.body }];
@@ -1069,14 +1179,20 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       const d = pattern?.taken.has(s) ? [] : decl(s, setup);
       return d.length ? [...notes, ...d] : [];
     });
-    const out = markup(view?.type === "ReturnStatement" && view.argument ? [unwrap(view.argument)] : []);
+    let root = view?.type === "ReturnStatement" && view.argument ? unwrap(view.argument) : undefined;
+    // `<C value={v}>…</C>` around the whole view: `provide c = v` (07)
+    for (let p = provider(root); p; p = provider(root)) {
+      lines.push(`provide ${p.name} = ${p.value}`);
+      root = p.kids.length === 1 ? p.kids[0] : { ...root!, type: "JSXFragment", children: p.kids };
+    }
+    const out = markup(root ? (root.type === "JSXFragment" ? root.children : [root]) : []);
     if (view?.type !== "ReturnStatement") fail(view ?? f, `${name}: a component ends with one return of its markup`);
     scopes.pop();
     return [`${prefix}component ${name}(${head}) {`, ...indented(lines, INDENT), ...(lines.length && out.length ? [""] : []), ...indented(out, INDENT), "}"];
   }
   const uses = (nodes: Node[], name: string): boolean =>
     nodes.some(function has(n: Node): boolean {
-      if (n.type === "Identifier" && n.name === name) return true;
+      if ((n.type === "Identifier" || n.type === "JSXIdentifier") && n.name === name) return true;
       return Object.keys(n).some((k) => k !== "loc" && (Array.isArray(n[k]) ? n[k] : [n[k]]).some((c: any) => c && typeof c.type === "string" && has(c)));
     });
 
@@ -1180,7 +1296,22 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
   reactive = 0;
 
   const comps = rxTops.flatMap((t) => t.comps.map(([name]) => name));
-  if (!defaultName) defaultName = comps.includes(mounted) ? mounted : comps.includes("App") ? "App" : comps[comps.length - 1] ?? "";
+  // a module that exports its components by name has no default of its own
+  const unnamed = rxTops.filter((t) => t.s.type !== "ExportNamedDeclaration").flatMap((t) => t.comps.map(([name]) => name));
+  if (!defaultName) defaultName = comps.includes(mounted) ? mounted : comps.includes("App") ? "App" : unnamed[unnamed.length - 1] ?? "";
+  // `function Root() { return <C value={v}><App /></C> }` as the default: a module-level `provide c = v`, and App the default
+  let rootOf: Node | undefined;
+  const provided: string[] = [];
+  const rootFn = rxTops.flatMap((t) => t.comps).find(([name]) => name === defaultName)?.[1];
+  const rootBody: Node[] = rootFn?.body.type === "BlockStatement" ? rootFn.body.body : [];
+  if (rootFn && !rootFn.params.length && rootBody.length === 1 && rootBody[0].type === "ReturnStatement" && rootBody[0].argument) {
+    let el: Node | undefined = unwrap(rootBody[0].argument);
+    const lines: string[] = [];
+    for (let p = provider(el); p; p = provider(el)) lines.push(`provide ${p.name} = ${p.value}`), (el = p.kids.length === 1 ? unwrap(p.kids[0]) : undefined);
+    const inner = el?.type === "JSXElement" && el.openingElement.selfClosing && el.openingElement.name.type === "JSXIdentifier" ? (el.openingElement.name.name as string) : "";
+    const bare = el?.openingElement?.attributes.every((a: Node) => a.type === "JSXAttribute" && a.name.name === "children");
+    if (lines.length && comps.includes(inner) && inner !== defaultName && bare) (rootOf = rootFn), provided.push(...lines), (defaultName = inner);
+  }
 
   const out: string[][] = [];
   for (const t of rxTops) {
@@ -1190,7 +1321,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       fail(t.s, `${declared(t.d).join(", ")}: Solid primitives outside a component (a custom hook) have no .rx form in this prototype`);
       for (const n of declared(t.d)) bind(n, { kind: "plain" });
     } else if (t.comps.length) {
-      t.comps.forEach(([name, f], i) => out.push([...(i ? [] : notes), ...component(name, f, name === defaultName ? "export default " : exported)]));
+      t.comps.forEach(([name, f], i) => out.push([...(i ? [] : notes), ...(f === rootOf ? provided : component(name, f, name === defaultName ? "export default " : exported))]));
     } else {
       const lines = decl(t.d, decls);
       if (lines.length) out.push([...notes, exported + lines[0], ...lines.slice(1)]);
@@ -1218,8 +1349,12 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
     const said = (sp: Node) => opts.declared?.(from, sp.type === "ImportSpecifier" ? sp.imported.name : "default");
     // a TypeScript type the module's .d.rx does not declare has no .rx name
     const used: Node[] = s.specifiers.filter((sp: Node) => !(sp.importKind === "type" && opts.declared && said(sp) !== "type"));
-    const spec = (sp: Node) => (sp.type === "ImportSpecifier" && sp.imported.name !== sp.local.name ? `${sp.imported.name} as ${sp.local.name}` : sp.local.name);
-    const at = JSON.stringify(from.replace(/\.(rx|tsx?|jsx?)$/, ""));
+    const spec = (sp: Node) => {
+      const r = (n: string) => renamed.get(sp.local.name) && n === sp.local.name ? renamed.get(n)! : renamed.has(sp.local.name) ? contextName(n) : n;
+      return sp.type === "ImportSpecifier" && sp.imported.name !== sp.local.name ? `${r(sp.imported.name)} as ${r(sp.local.name)}` : r(sp.local.name);
+    };
+    // another .rx module is named with its extension, or the compiler looks for a JavaScript one
+    const at = JSON.stringify(from.replace(/\.(tsx?|jsx?)$/, ""));
     if (opts.declared) {
       // the .d.rx decides: a pure fn imports pure, an io fn and a type do not
       for (const pure of [true, false]) {
@@ -1232,7 +1367,7 @@ export function toRx(ast: Node, src: string, opts: { declared?: Declared } = {})
       continue;
     }
     // one import statement is one purity, as it was written: pure when reactive scope reads any of its names
-    const pure = used.some((sp: Node) => pureImports.has(sp.local.name)) ? "pure " : "";
+    const pure = !/\.rx$/.test(from) && used.some((sp: Node) => pureImports.has(sp.local.name)) ? "pure " : "";
     const def = used.find((sp: Node) => sp.type === "ImportDefaultSpecifier");
     const named = used.filter((sp: Node) => sp.type === "ImportSpecifier").map(spec);
     imports.push(`import ${pure}${def ? def.local.name : `{ ${named.join(", ")} }`} from ${at}`);

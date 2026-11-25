@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@amoutonbrady/lz-string':
-        specifier: 0.2.0
-        version: 0.2.0
       '@solidjs/web':
         specifier: 2.0.3
         version: 2.0.3(solid-js@2.0.3)
@@ -44,10 +41,6 @@ importers:
         version: 8.3.8
 
 packages:
-
-  '@amoutonbrady/lz-string@0.2.0':
-    resolution: {integrity: sha512-QTulRZhJnXmo6yyknjFuWpZIxp98AStw0TbY9hwYIvPscX6N3ON55Tw46YP0NxPEMRrr8QroKPyrLUsJGj6KkA==}
-    engines: {node: '>=20'}
 
   '@ampproject/remapping@2.3.0':
     resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
@@ -496,8 +489,6 @@ packages:
         optional: true
 
 snapshots:
-
-  '@amoutonbrady/lz-string@0.2.0': {}
 
   '@ampproject/remapping@2.3.0':
     dependencies:

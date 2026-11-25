@@ -4,7 +4,7 @@
 
 Type `.rx` on the left and see it as Solid 2.0 on the right: the program written with Solid's own primitives
 (`createSignal`, `createMemo`, `createOptimistic`, `action`, `<Errored>`, `<Loading>`) and the checker's diagnostics
-(each linked to `guide/diagnostics.md#<code>`). The program is kept in the URL hash, so a link reopens it.
+(each linked to `guide/diagnostics.md#<code>`). The program is kept in the URL hash, so a link reopens it, the Solid → .rx side included.
 
 The Solid view is the JSX the crate hands to Solid's compiler, with each `__rt` helper that is a Solid primitive
 underneath written as that primitive and the mangled names (`v$id`, `w$id`) made plain (`src/solidify.ts`), then
@@ -35,17 +35,12 @@ the `.rx` imports; a call to one of its `async` functions from reactive scope is
 compiler then checks the `.rx`, so a Solid program with, say, an await and no `Errored` boundary gets
 `UNHANDLED_FAILURE`.
 
+The same button turns the page back. Each way round, the left side gets what the right side showed: the Solid view
+going in, and the `.rx` (with its `helpers.ts`) coming back, unless the reading left something out, in which case
+the editor keeps the program it had.
+
 `pnpm test:torx` is the round trip: each example's `.rx` → Solid view → `.rx` → Solid view must give the same view,
 plus hand-written Solid that must convert and compile, or be refused with reasons.
-
-## Open in Solid Playground
-
-The Solid view is a reading aid, but for most programs it is also Solid that runs. The button over it opens
-playground.solidjs.com with the view as `main.tsx` (mounted with `render()`), the program's plain modules as tabs, and
-the compiler's scoped CSS injected (`src/solidplay.ts`). The tabs travel in the URL hash, the way that playground
-imports them. There is no link, and a tooltip says why, when the view still needs the compiler's runtime or imports a
-module the program has no file for. The `await` and `action` examples carry `users.js` and `names.js` beside their
-`.d.rx` declarations for this.
 
 ## Types on hover, and completion
 
